@@ -9,6 +9,7 @@
     "dev": "npm run build && npm run start"
   },
   "dependencies": {
+    "@google/genai": "^2.11.0",
     "dotenv": "^16.4.5",
     "ws": "^8.18.0"
   },

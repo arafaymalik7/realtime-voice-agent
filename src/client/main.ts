@@ -20,6 +20,7 @@ ws.binaryType = "arraybuffer";
 const transcriptEl = document.getElementById("transcript") as HTMLElement;
 const latencyEl = document.getElementById("latency") as HTMLElement;
 let interimLine: HTMLElement | null = null;
+let agentLine: HTMLElement | null = null;
 
 function renderStt(msg: { event: string; transcript: string; turnIndex: number }): void {
   if (!interimLine) {
@@ -46,8 +47,20 @@ ws.addEventListener("message", (e: MessageEvent) => {
   }
   if (msg.type === "stt") {
     renderStt(msg as unknown as { event: string; transcript: string; turnIndex: number });
+  } else if (msg.type === "agent") {
+    if (!agentLine) {
+      agentLine = document.createElement("div");
+      agentLine.textContent = "agent: ";
+      agentLine.style.fontWeight = "bold";
+      transcriptEl.appendChild(agentLine);
+    }
+    agentLine.textContent += String(msg.delta);
+  } else if (msg.type === "agent_done") {
+    agentLine = null;
   } else if (msg.type === "metric" && msg.name === "eot_gap_ms") {
     latencyEl.textContent = `end-of-turn gap: ${msg.value} ms`;
+  } else if (msg.type === "metric" && msg.name === "llm_first_token_ms") {
+    latencyEl.textContent = `LLM first token: ${msg.value} ms`;
   } else if (msg.type === "error") {
     console.error("server error:", msg);
     setStatus(`error: ${msg.code}`, "err");

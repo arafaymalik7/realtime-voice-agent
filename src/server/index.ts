@@ -4,10 +4,12 @@ import fs from "fs";
 import path from "path";
 import { WebSocketServer, WebSocket } from "ws";
 import { SttSession, TurnEvent, SttError } from "./stt";
+import { LlmClient, LlmError } from "./llm";
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.resolve(__dirname, "..", "..", "public");
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY ?? "";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 
 // Origins allowed to open a WebSocket. Localhost only for now; revisit in Phase 8.
 const ALLOWED_ORIGINS = new Set([
@@ -87,6 +89,44 @@ wss.on("connection", (ws: WebSocket) => {
     return lastFrameWallMs - (audioForwardedSec - posSec) * 1000;
   }
 
+  // --- LLM (Phase 3) ---
+  const llm = GEMINI_API_KEY ? new LlmClient(GEMINI_API_KEY) : null;
+  llm?.warmup(); // pre-establish the HTTPS connection while the user is still silent
+  let llmAbort: AbortController | null = null;
+
+  function respondTo(transcript: string): void {
+    if (!llm) {
+      const err = { source: "llm", code: "NO_API_KEY", message: "GEMINI_API_KEY not set" };
+      log(`ERROR ${JSON.stringify(err)}`);
+      sendJson(ws, { type: "error", ...err });
+      return;
+    }
+    // Only one reply in flight; a new user turn supersedes the old reply.
+    llmAbort?.abort();
+    const abort = new AbortController();
+    llmAbort = abort;
+    log(`llm: request sent for "${transcript}"`);
+    void llm.respond(
+      transcript,
+      {
+        onFirstToken: (latencyMs) => {
+          log(`llm: first token in ${latencyMs}ms`);
+          sendJson(ws, { type: "metric", name: "llm_first_token_ms", value: latencyMs });
+        },
+        onDelta: (text) => sendJson(ws, { type: "agent", delta: text }),
+        onDone: (fullText) => {
+          log(`llm: done reply="${fullText}"`);
+          sendJson(ws, { type: "agent_done" });
+        },
+        onError: (e: LlmError) => {
+          log(`ERROR ${JSON.stringify(e)}`);
+          sendJson(ws, { type: "error", ...e });
+        },
+      },
+      abort.signal
+    );
+  }
+
   function startStt(): void {
     if (!DEEPGRAM_API_KEY) {
       const err = { source: "stt", code: "NO_API_KEY", message: "DEEPGRAM_API_KEY not set" };
@@ -114,6 +154,7 @@ wss.on("connection", (ws: WebSocket) => {
           );
           if (t.event === "EndOfTurn") {
             sendJson(ws, { type: "metric", name: "eot_gap_ms", value: gapMs });
+            if (t.transcript.trim().length > 0) respondTo(t.transcript);
           }
         } else if (t.event !== "Update") {
           log(`stt: ${t.event} turn=${t.turnIndex}`);
@@ -156,6 +197,7 @@ wss.on("connection", (ws: WebSocket) => {
   ws.on("close", () => {
     stt?.close();
     stt = null;
+    llmAbort?.abort();
     log(`disconnected (forwarded ${frames} audio frames)`);
   });
   ws.on("error", (err) => log(`WS error: ${err.message}`));

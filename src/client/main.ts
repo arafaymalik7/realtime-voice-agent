@@ -17,6 +17,43 @@ const proto = location.protocol === "https:" ? "wss" : "ws";
 const ws = new WebSocket(`${proto}://${location.host}`);
 ws.binaryType = "arraybuffer";
 
+const transcriptEl = document.getElementById("transcript") as HTMLElement;
+const latencyEl = document.getElementById("latency") as HTMLElement;
+let interimLine: HTMLElement | null = null;
+
+function renderStt(msg: { event: string; transcript: string; turnIndex: number }): void {
+  if (!interimLine) {
+    interimLine = document.createElement("div");
+    transcriptEl.appendChild(interimLine);
+  }
+  if (msg.event === "EndOfTurn") {
+    interimLine.textContent = `you: ${msg.transcript}`;
+    interimLine.style.color = "";
+    interimLine = null; // next turn starts a fresh line
+  } else {
+    interimLine.textContent = `you: ${msg.transcript}`;
+    interimLine.style.color = "#888";
+  }
+}
+
+ws.addEventListener("message", (e: MessageEvent) => {
+  if (typeof e.data !== "string") return;
+  let msg: { type: string; [k: string]: unknown };
+  try {
+    msg = JSON.parse(e.data);
+  } catch {
+    return;
+  }
+  if (msg.type === "stt") {
+    renderStt(msg as unknown as { event: string; transcript: string; turnIndex: number });
+  } else if (msg.type === "metric" && msg.name === "eot_gap_ms") {
+    latencyEl.textContent = `end-of-turn gap: ${msg.value} ms`;
+  } else if (msg.type === "error") {
+    console.error("server error:", msg);
+    setStatus(`error: ${msg.code}`, "err");
+  }
+});
+
 ws.addEventListener("open", () => {
   console.log("WS open");
   setStatus("connected", "ok");

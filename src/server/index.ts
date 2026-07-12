@@ -67,12 +67,37 @@ const wss = new WebSocketServer({
 wss.on("connection", (ws: WebSocket) => {
   log("connected");
 
+  // Phase 1: count inbound audio frames and summarize every 5 s.
+  let frames = 0;
+  let bytes = 0;
+  let minSize = Infinity;
+  let maxSize = 0;
+  const summary = setInterval(() => {
+    if (frames === 0) return;
+    log(`audio summary (last 5 s): frames=${frames} minSize=${minSize}B maxSize=${maxSize}B total=${bytes}B`);
+    frames = 0;
+    bytes = 0;
+    minSize = Infinity;
+    maxSize = 0;
+  }, 5000);
+
   ws.on("message", (data, isBinary) => {
-    // Phase 0: just acknowledge presence of traffic. Audio handling comes in Phase 1.
-    log(`WS message received (${isBinary ? "binary" : "text"}, ${(data as Buffer).length} bytes)`);
+    const size = (data as Buffer).length;
+    if (isBinary) {
+      frames++;
+      bytes += size;
+      if (size < minSize) minSize = size;
+      if (size > maxSize) maxSize = size;
+      if (frames % 10 === 0) log(`audio frame #${frames} (${size}B)`);
+    } else {
+      log(`WS text message (${size}B)`);
+    }
   });
 
-  ws.on("close", () => log("disconnected"));
+  ws.on("close", () => {
+    clearInterval(summary);
+    log("disconnected");
+  });
   ws.on("error", (err) => log(`WS error: ${err.message}`));
 });
 

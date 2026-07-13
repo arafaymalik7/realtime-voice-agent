@@ -5,11 +5,14 @@ import path from "path";
 import { WebSocketServer, WebSocket } from "ws";
 import { SttSession, TurnEvent, SttError } from "./stt";
 import { LlmClient, LlmError } from "./llm";
+import { TtsStream } from "./tts";
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.resolve(__dirname, "..", "..", "public");
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY ?? "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY ?? "";
+const TTS_VOICE_ID = process.env.TTS_VOICE_ID ?? "EXAVITQu4vr4xnSDxMaL"; // Sarah (premade)
 
 // Origins allowed to open a WebSocket. Localhost only for now; revisit in Phase 8.
 const ALLOWED_ORIGINS = new Set([
@@ -94,7 +97,45 @@ wss.on("connection", (ws: WebSocket) => {
   llm?.warmup(); // pre-establish the HTTPS connection while the user is still silent
   let llmAbort: AbortController | null = null;
 
-  function respondTo(transcript: string): void {
+  let tts: TtsStream | null = null;
+
+  // Eager-reply state: a reply started on EagerEndOfTurn buffers its audio until
+  // EndOfTurn confirms the turn really ended (flush) or TurnResumed voids it (discard).
+  let replyTranscript: string | null = null; // transcript the in-flight reply answers
+  let replyLive = false; // false = buffering, true = streaming to client
+  let replyBuffer: Buffer[] = [];
+  let replyFirstByteSent = false;
+  let replySpeechEndWallMs: number | null = null;
+
+  function stopReply(): void {
+    llmAbort?.abort();
+    tts?.abort();
+    tts = null;
+    replyTranscript = null;
+    replyLive = false;
+    replyBuffer = [];
+    replyFirstByteSent = false;
+  }
+
+  function deliverAudio(pcm: Buffer): void {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (!replyFirstByteSent) {
+      replyFirstByteSent = true;
+      const headline = replySpeechEndWallMs !== null ? Date.now() - replySpeechEndWallMs : null;
+      log(`tts: first audio byte to client (headline speech-end -> first-byte ${headline}ms)`);
+      sendJson(ws, { type: "metric", name: "headline_server_ms", value: headline });
+    }
+    ws.send(pcm);
+  }
+
+  /** EndOfTurn confirmed the eager reply: stream buffered audio + go live. */
+  function confirmReply(): void {
+    replyLive = true;
+    for (const pcm of replyBuffer) deliverAudio(pcm);
+    replyBuffer = [];
+  }
+
+  function respondTo(transcript: string, speechEndWallMs: number | null, live: boolean): void {
     if (!llm) {
       const err = { source: "llm", code: "NO_API_KEY", message: "GEMINI_API_KEY not set" };
       log(`ERROR ${JSON.stringify(err)}`);
@@ -102,9 +143,40 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     // Only one reply in flight; a new user turn supersedes the old reply.
-    llmAbort?.abort();
+    stopReply();
     const abort = new AbortController();
     llmAbort = abort;
+    replyTranscript = transcript;
+    replyLive = live;
+    replySpeechEndWallMs = speechEndWallMs;
+
+    // Open the TTS stream now — its handshake overlaps LLM inference.
+    let replyTts: TtsStream | null = null;
+    if (ELEVENLABS_API_KEY) {
+      replyTts = new TtsStream(ELEVENLABS_API_KEY, TTS_VOICE_ID, {
+        onAudio: (pcm) => {
+          if (replyLive) deliverAudio(pcm);
+          else replyBuffer.push(pcm);
+        },
+        onDone: () => {
+          sendJson(ws, { type: "tts_done" });
+        },
+        onError: (e) => {
+          log(`ERROR ${JSON.stringify(e)}`);
+          sendJson(ws, { type: "error", ...e });
+        },
+      });
+      tts = replyTts;
+    } else {
+      const err = { source: "tts", code: "NO_API_KEY", message: "ELEVENLABS_API_KEY not set" };
+      log(`ERROR ${JSON.stringify(err)}`);
+      sendJson(ws, { type: "error", ...err });
+    }
+
+    // Tell the client when the user's speech ended (its clock == our clock host-wise;
+    // used for the end-to-end headline measurement at the playback edge).
+    sendJson(ws, { type: "speech_end", wallMs: speechEndWallMs });
+
     log(`llm: request sent for "${transcript}"`);
     void llm.respond(
       transcript,
@@ -113,14 +185,19 @@ wss.on("connection", (ws: WebSocket) => {
           log(`llm: first token in ${latencyMs}ms`);
           sendJson(ws, { type: "metric", name: "llm_first_token_ms", value: latencyMs });
         },
-        onDelta: (text) => sendJson(ws, { type: "agent", delta: text }),
+        onDelta: (text) => {
+          sendJson(ws, { type: "agent", delta: text });
+          replyTts?.sendText(text);
+        },
         onDone: (fullText) => {
           log(`llm: done reply="${fullText}"`);
           sendJson(ws, { type: "agent_done" });
+          replyTts?.end();
         },
         onError: (e: LlmError) => {
           log(`ERROR ${JSON.stringify(e)}`);
           sendJson(ws, { type: "error", ...e });
+          replyTts?.abort();
         },
       },
       abort.signal
@@ -152,9 +229,30 @@ wss.on("connection", (ws: WebSocket) => {
             `stt: ${t.event} turn=${t.turnIndex} conf=${t.endOfTurnConfidence?.toFixed(2)} ` +
               `gap=${gapMs !== null ? gapMs + "ms" : "n/a"} transcript="${t.transcript}"`
           );
-          if (t.event === "EndOfTurn") {
+          const speechEndWallMs =
+            t.lastWordEnd !== null && lastFrameWallMs > 0 ? Math.round(wallAt(t.lastWordEnd)) : null;
+
+          if (t.event === "EagerEndOfTurn" && t.transcript.trim().length > 0) {
+            // Head start: run LLM+TTS now, buffer the audio until the turn is confirmed.
+            if (replyTranscript !== t.transcript) {
+              respondTo(t.transcript, speechEndWallMs, /* live */ false);
+            }
+          } else if (t.event === "EndOfTurn") {
             sendJson(ws, { type: "metric", name: "eot_gap_ms", value: gapMs });
-            if (t.transcript.trim().length > 0) respondTo(t.transcript);
+            if (t.transcript.trim().length > 0) {
+              if (replyTranscript === t.transcript && !replyLive) {
+                log("turn: eager reply confirmed, flushing buffered audio");
+                confirmReply();
+              } else {
+                respondTo(t.transcript, speechEndWallMs, /* live */ true);
+              }
+            }
+          }
+        } else if (t.event === "TurnResumed") {
+          log(`stt: TurnResumed turn=${t.turnIndex}`);
+          if (replyTranscript !== null && !replyLive) {
+            log("turn: user kept talking — voiding eager reply");
+            stopReply();
           }
         } else if (t.event !== "Update") {
           log(`stt: ${t.event} turn=${t.turnIndex}`);
@@ -197,7 +295,7 @@ wss.on("connection", (ws: WebSocket) => {
   ws.on("close", () => {
     stt?.close();
     stt = null;
-    llmAbort?.abort();
+    stopReply();
     log(`disconnected (forwarded ${frames} audio frames)`);
   });
   ws.on("error", (err) => log(`WS error: ${err.message}`));

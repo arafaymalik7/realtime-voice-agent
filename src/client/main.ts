@@ -17,6 +17,65 @@ const proto = location.protocol === "https:" ? "wss" : "ws";
 const ws = new WebSocket(`${proto}://${location.host}`);
 ws.binaryType = "arraybuffer";
 
+// --- Agent speech playback (Phase 4) ---
+// Raw 16 kHz PCM in, gapless Web Audio scheduling, instantly stoppable (barge-in).
+const PLAYBACK_RATE = 16000;
+let playCtx: AudioContext | null = null;
+let nextPlayAt = 0;
+let liveSources: AudioBufferSourceNode[] = [];
+let speechEndWallMs: number | null = null;
+let awaitingFirstAudio = false;
+
+function playPcm(buf: ArrayBuffer): void {
+  if (!playCtx) playCtx = new AudioContext();
+  if (playCtx.state === "suspended") void playCtx.resume();
+
+  const int16 = new Int16Array(buf);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 0x8000;
+
+  const audioBuf = playCtx.createBuffer(1, float32.length, PLAYBACK_RATE);
+  audioBuf.getChannelData(0).set(float32);
+
+  const src = playCtx.createBufferSource();
+  src.buffer = audioBuf;
+  src.connect(playCtx.destination);
+
+  const now = playCtx.currentTime;
+  if (nextPlayAt < now) nextPlayAt = now;
+
+  if (awaitingFirstAudio) {
+    awaitingFirstAudio = false;
+    const startDelayMs = (nextPlayAt - now) * 1000;
+    if (speechEndWallMs !== null) {
+      const headline = Math.round(Date.now() + startDelayMs - speechEndWallMs);
+      latencyEl.textContent = `HEADLINE speech-end -> first audio: ${headline} ms`;
+      console.log(`HEADLINE speech-end -> first-audio-played: ${headline}ms`);
+    }
+  }
+
+  src.start(nextPlayAt);
+  nextPlayAt += audioBuf.duration;
+  liveSources.push(src);
+  src.onended = () => {
+    liveSources = liveSources.filter((s) => s !== src);
+  };
+}
+
+/** Instant stop of all agent audio (barge-in, Phase 5). */
+function stopPlayback(): void {
+  for (const s of liveSources) {
+    try {
+      s.stop();
+    } catch {
+      /* already stopped */
+    }
+  }
+  liveSources = [];
+  nextPlayAt = 0;
+}
+void stopPlayback; // used in Phase 5
+
 const transcriptEl = document.getElementById("transcript") as HTMLElement;
 const latencyEl = document.getElementById("latency") as HTMLElement;
 let interimLine: HTMLElement | null = null;
@@ -38,7 +97,10 @@ function renderStt(msg: { event: string; transcript: string; turnIndex: number }
 }
 
 ws.addEventListener("message", (e: MessageEvent) => {
-  if (typeof e.data !== "string") return;
+  if (typeof e.data !== "string") {
+    playPcm(e.data as ArrayBuffer); // binary downlink = agent speech PCM
+    return;
+  }
   let msg: { type: string; [k: string]: unknown };
   try {
     msg = JSON.parse(e.data);
@@ -60,7 +122,12 @@ ws.addEventListener("message", (e: MessageEvent) => {
   } else if (msg.type === "metric" && msg.name === "eot_gap_ms") {
     latencyEl.textContent = `end-of-turn gap: ${msg.value} ms`;
   } else if (msg.type === "metric" && msg.name === "llm_first_token_ms") {
-    latencyEl.textContent = `LLM first token: ${msg.value} ms`;
+    console.log(`LLM first token: ${msg.value} ms`);
+  } else if (msg.type === "speech_end") {
+    speechEndWallMs = typeof msg.wallMs === "number" ? msg.wallMs : null;
+    awaitingFirstAudio = true;
+  } else if (msg.type === "tts_done") {
+    // agent finished speaking (playback may still be draining scheduled audio)
   } else if (msg.type === "error") {
     console.error("server error:", msg);
     setStatus(`error: ${msg.code}`, "err");

@@ -28,12 +28,14 @@ export interface SttEvents {
 }
 
 const FLUX_URL = "wss://api.deepgram.com/v2/listen";
+const CONNECT_TIMEOUT_MS = 5_000;
 
 export class SttSession {
   private ws: WebSocket | null = null;
   private queue: Buffer[] = [];
   private open = false;
   private closed = false;
+  private connectTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private apiKey: string,
@@ -61,7 +63,19 @@ export class SttSession {
       headers: { Authorization: `Token ${this.apiKey}` },
     });
 
+    this.connectTimer = setTimeout(() => {
+      if (!this.open && !this.closed) {
+        this.events.onError({
+          source: "stt",
+          code: "CONNECT_TIMEOUT",
+          message: `Deepgram connection not established within ${CONNECT_TIMEOUT_MS}ms`,
+        });
+        this.ws?.terminate();
+      }
+    }, CONNECT_TIMEOUT_MS);
+
     this.ws.on("open", () => {
+      if (this.connectTimer) clearTimeout(this.connectTimer);
       this.open = true;
       for (const buf of this.queue) this.ws!.send(buf);
       this.queue = [];
@@ -131,6 +145,7 @@ export class SttSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.connectTimer) clearTimeout(this.connectTimer);
     if (this.open && this.ws) {
       try {
         this.ws.send(JSON.stringify({ type: "CloseStream" }));

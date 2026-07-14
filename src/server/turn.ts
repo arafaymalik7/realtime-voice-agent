@@ -16,6 +16,8 @@ export interface TurnDeps {
   sendJson: (obj: unknown) => void;
   sendAudio: (pcm: Buffer) => void;
   log: (msg: string) => void;
+  /** Unrecoverable component failure: speak the fallback line and end the session. */
+  onFatal: (e: { source: string; code: string; message: string }) => void;
 }
 
 export class TurnManager {
@@ -136,9 +138,7 @@ export class TurnManager {
   private startReply(transcript: string, speechEndWallMs: number | null, live: boolean): void {
     const { llm, createTts, sendJson, log } = this.deps;
     if (!llm) {
-      const err = { source: "llm", code: "NO_API_KEY", message: "GEMINI_API_KEY not set" };
-      log(`ERROR ${JSON.stringify(err)}`);
-      sendJson({ type: "error", ...err });
+      this.deps.onFatal({ source: "llm", code: "NO_API_KEY", message: "GEMINI_API_KEY not set" });
       return;
     }
 
@@ -170,8 +170,8 @@ export class TurnManager {
       onError: (e) => {
         if (this.tts !== replyTts) return;
         log(`ERROR ${JSON.stringify(e)}`);
-        sendJson({ type: "error", ...e });
         this.stopReply("tts error");
+        this.deps.onFatal(e);
       },
     });
     this.tts = replyTts;
@@ -210,8 +210,9 @@ export class TurnManager {
         onError: (e: LlmError) => {
           if (abort.signal.aborted) return;
           log(`ERROR ${JSON.stringify(e)}`);
-          sendJson({ type: "error", ...e });
           replyTts?.abort();
+          this.stopReply("llm error");
+          this.deps.onFatal(e);
         },
       },
       abort.signal

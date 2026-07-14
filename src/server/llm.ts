@@ -44,6 +44,8 @@ function systemInstruction(): string {
 
 const MAX_HISTORY_TURNS = 20; // user+model messages kept for context
 const MAX_TOOL_ROUNDS = 4;
+const RESPONSE_TIMEOUT_MS = 15_000; // whole reply incl. tool rounds
+const MAX_ATTEMPTS = 2; // 1 retry, and only if nothing was emitted yet
 
 export class LlmClient {
   private ai: GoogleGenAI;
@@ -75,12 +77,45 @@ export class LlmClient {
   async respond(userText: string, events: LlmEvents, signal?: AbortSignal): Promise<void> {
     const sentAt = Date.now();
     let firstToken = true;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const err = await this.attempt(userText, events, sentAt, () => firstToken, (v) => (firstToken = v), signal);
+      if (err === null) return; // success, abort, or already-reported error
+      // Retry only if nothing was spoken yet and we have attempts left.
+      if (!firstToken || attempt === MAX_ATTEMPTS) {
+        events.onError(err);
+        return;
+      }
+      console.log(`[llm] attempt ${attempt} failed (${err.code}: ${err.message}) — retrying once`);
+    }
+  }
+
+  /** One attempt. Returns null on success/abort/self-reported error; an LlmError if retryable. */
+  private async attempt(
+    userText: string,
+    events: LlmEvents,
+    sentAt: number,
+    isFirstToken: () => boolean,
+    setFirstToken: (v: boolean) => void,
+    signal?: AbortSignal
+  ): Promise<LlmError | null> {
     let fullText = "";
     const contents: Content[] = [...this.history, { role: "user", parts: [{ text: userText }] }];
 
+    // Hard wall-clock cap on the whole reply: abort the SDK via our own
+    // controller so a hung provider can't wedge the session.
+    const ac = new AbortController();
+    let timedOut = false;
+    const onCallerAbort = () => ac.abort();
+    signal?.addEventListener("abort", onCallerAbort, { once: true });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      ac.abort();
+    }, RESPONSE_TIMEOUT_MS);
+
     const config: Record<string, unknown> = {
       systemInstruction: systemInstruction(),
-      abortSignal: signal,
+      abortSignal: ac.signal,
     };
     if (this.tools) {
       config.tools = [{ functionDeclarations: this.tools.declarations }];
@@ -99,13 +134,13 @@ export class LlmClient {
         // rejects replayed functionCall parts that lost their thought signature.
         const modelParts: Part[] = [];
         for await (const chunk of stream) {
-          if (signal?.aborted) return;
+          if (signal?.aborted) return null;
           const parts = chunk.candidates?.[0]?.content?.parts ?? [];
           for (const part of parts) {
             modelParts.push(part);
             if (part.text) {
-              if (firstToken) {
-                firstToken = false;
+              if (isFirstToken()) {
+                setFirstToken(false);
                 events.onFirstToken(Date.now() - sentAt);
               }
               fullText += part.text;
@@ -120,17 +155,16 @@ export class LlmClient {
             }
           }
         }
-        if (signal?.aborted) return;
+        if (signal?.aborted) return null;
 
         if (calls.length === 0) break; // final answer reached
 
         if (round === MAX_TOOL_ROUNDS) {
-          events.onError({
+          return {
             source: "llm",
             code: "TOOL_LOOP_LIMIT",
             message: `model still calling tools after ${MAX_TOOL_ROUNDS} rounds`,
-          });
-          return;
+          };
         }
 
         // Execute tools; feed results back and go another round.
@@ -149,7 +183,7 @@ export class LlmClient {
         contents.push({ role: "user", parts: responseParts });
       }
 
-      if (signal?.aborted) return;
+      if (signal?.aborted) return null;
       // Commit compact history: the user turn and the final spoken reply (which
       // contains anything worth remembering, e.g. the confirmation code).
       this.history.push({ role: "user", parts: [{ text: userText }] });
@@ -158,10 +192,21 @@ export class LlmClient {
         this.history = this.history.slice(-MAX_HISTORY_TURNS);
       }
       events.onDone(fullText);
+      return null;
     } catch (err) {
-      if (signal?.aborted) return; // aborted mid-request; not an error
+      if (signal?.aborted) return null; // caller aborted mid-request; not an error
+      if (timedOut) {
+        return {
+          source: "llm",
+          code: "TIMEOUT",
+          message: `no completion within ${RESPONSE_TIMEOUT_MS}ms`,
+        };
+      }
       const message = err instanceof Error ? err.message : String(err);
-      events.onError({ source: "llm", code: "REQUEST_FAILED", message });
+      return { source: "llm", code: "REQUEST_FAILED", message };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onCallerAbort);
     }
   }
 }

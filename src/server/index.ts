@@ -8,6 +8,7 @@ import { LlmClient } from "./llm";
 import { createToolSet } from "./tools";
 import { TtsStream } from "./tts";
 import { TurnManager } from "./turn";
+import { initFallback, getFallbackAudio, FALLBACK_LINE } from "./fallback";
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.resolve(__dirname, "..", "..", "public");
@@ -99,6 +100,36 @@ wss.on("connection", (ws: WebSocket) => {
     return lastFrameWallMs - (audioForwardedSec - posSec) * 1000;
   }
 
+  // --- Safe failure: speak the cached fallback line and end the session ---
+  let failed = false;
+  function failSession(e: { source: string; code: string; message: string }): void {
+    if (failed) return;
+    failed = true;
+    log(`FATAL ${JSON.stringify(e)} — speaking fallback and ending session`);
+
+    // Silence the pipeline first so nothing races the fallback audio.
+    stt?.close();
+    stt = null;
+    turn.onDisconnect();
+
+    const fb = getFallbackAudio();
+    sendJson(ws, {
+      type: "fatal",
+      ...e,
+      fallbackLine: fb && !fb.isTone ? FALLBACK_LINE : null,
+    });
+    let waitMs = 500;
+    if (fb && ws.readyState === WebSocket.OPEN) {
+      ws.send(fb.pcm);
+      waitMs = fb.durationMs + 750;
+    }
+    setTimeout(() => {
+      sendJson(ws, { type: "session_ended" });
+      ws.close();
+      log("session ended cleanly after fatal error");
+    }, waitMs);
+  }
+
   // --- Turn manager: owns the reply lifecycle and the state machine ---
   const llm = GEMINI_API_KEY ? new LlmClient(GEMINI_API_KEY, createToolSet()) : null;
   llm?.warmup(); // pre-establish the HTTPS connection while the user is still silent
@@ -107,9 +138,7 @@ wss.on("connection", (ws: WebSocket) => {
     llm,
     createTts: (events) => {
       if (!ELEVENLABS_API_KEY) {
-        const err = { source: "tts", code: "NO_API_KEY", message: "ELEVENLABS_API_KEY not set" };
-        log(`ERROR ${JSON.stringify(err)}`);
-        sendJson(ws, { type: "error", ...err });
+        failSession({ source: "tts", code: "NO_API_KEY", message: "ELEVENLABS_API_KEY not set" });
         return null;
       }
       return new TtsStream(ELEVENLABS_API_KEY, TTS_VOICE_ID, events);
@@ -119,13 +148,12 @@ wss.on("connection", (ws: WebSocket) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(pcm);
     },
     log,
+    onFatal: failSession,
   });
 
   function startStt(): void {
     if (!DEEPGRAM_API_KEY) {
-      const err = { source: "stt", code: "NO_API_KEY", message: "DEEPGRAM_API_KEY not set" };
-      log(`ERROR ${JSON.stringify(err)}`);
-      sendJson(ws, { type: "error", ...err });
+      failSession({ source: "stt", code: "NO_API_KEY", message: "DEEPGRAM_API_KEY not set" });
       return;
     }
     stt = new SttSession(
@@ -164,9 +192,20 @@ wss.on("connection", (ws: WebSocket) => {
         },
         onError: (e: SttError) => {
           log(`ERROR ${JSON.stringify(e)}`);
-          sendJson(ws, { type: "error", ...e });
+          failSession(e);
         },
-        onClose: () => log("stt: Deepgram connection closed"),
+        onClose: () => {
+          log("stt: Deepgram connection closed");
+          // Unexpected close while the mic is actively streaming = transcription
+          // is dead mid-conversation. A close after idle (mic stopped) is benign.
+          if (!failed && lastFrameWallMs > 0 && Date.now() - lastFrameWallMs < 10_000) {
+            failSession({
+              source: "stt",
+              code: "CONNECTION_LOST",
+              message: "Deepgram closed the connection mid-conversation",
+            });
+          }
+        },
       },
       { eotThreshold: EOT_THRESHOLD, eagerEotThreshold: EAGER_EOT_THRESHOLD }
     );
@@ -219,6 +258,11 @@ wss.on("connection", (ws: WebSocket) => {
     log(`disconnected (forwarded ${frames} audio frames)`);
   });
   ws.on("error", (err) => log(`WS error: ${err.message}`));
+});
+
+void initFallback(ELEVENLABS_API_KEY, TTS_VOICE_ID).then(() => {
+  const fb = getFallbackAudio();
+  log(`fallback audio cached: ${fb ? (fb.isTone ? "tone (TTS unavailable)" : `spoken line, ${fb.durationMs}ms`) : "none"}`);
 });
 
 server.listen(PORT, () => {

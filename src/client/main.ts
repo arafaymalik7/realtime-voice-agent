@@ -189,6 +189,19 @@ ws.addEventListener("message", (e: MessageEvent) => {
     acceptAudio = false;
   } else if (msg.type === "turn_state") {
     console.log(`turn state: ${msg.state}`);
+  } else if (msg.type === "fatal") {
+    console.error("FATAL server error:", msg);
+    acceptAudio = true; // let the fallback line play
+    awaitingFirstAudio = false; // never suppress it
+    setStatus(`FAILED: ${msg.source}/${msg.code}`, "err");
+    const line = document.createElement("div");
+    line.style.color = "#c00";
+    line.textContent = `⚠ ${msg.source} failed (${msg.code}). ${msg.fallbackLine ?? "Session ending."}`;
+    transcriptEl.appendChild(line);
+  } else if (msg.type === "session_ended") {
+    console.log("session ended by server");
+    stopCapture();
+    setStatus("session ended", "err");
   } else if (msg.type === "error") {
     console.error("server error:", msg);
     setStatus(`error: ${msg.code}`, "err");

@@ -2,6 +2,7 @@ import "dotenv/config";
 import http from "http";
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { SttSession, TurnEvent, SttError } from "./stt";
 import { LlmClient } from "./llm";
@@ -21,6 +22,28 @@ const TTS_VOICE_ID = process.env.TTS_VOICE_ID ?? "EXAVITQu4vr4xnSDxMaL"; // Sara
 // user off; eager threshold low so replies start early (voided on TurnResumed).
 const EOT_THRESHOLD = 0.7;
 const EAGER_EOT_THRESHOLD = 0.4;
+
+// --- Security / abuse limits (Phase 8) ---
+const SESSION_TOKEN_TTL_MS = 60_000; // token must be used within a minute
+const MAX_CONNS_PER_IP = 3;
+const LLM_CALLS_PER_MIN = 20; // caps cost abuse per session
+const IDLE_TIMEOUT_MS = Number(process.env.IDLE_TIMEOUT_MS) || 5 * 60_000;
+// Transcripts are user speech (PII). Only log them when explicitly enabled.
+const DEBUG_TRANSCRIPTS = process.env.DEBUG_TRANSCRIPTS === "1";
+
+function redact(text: string): string {
+  return DEBUG_TRANSCRIPTS ? text : `[redacted ${text.length} chars]`;
+}
+
+// Short-lived single-use session tokens: fetched via GET /session by the page,
+// required to open a WebSocket. Blocks drive-by WS connections.
+const sessionTokens = new Map<string, number>(); // token -> expiry epoch ms
+setInterval(() => {
+  const now = Date.now();
+  for (const [t, exp] of sessionTokens) if (exp < now) sessionTokens.delete(t);
+}, 30_000).unref();
+
+const connsPerIp = new Map<string, number>();
 
 // Origins allowed to open a WebSocket. Localhost only for now; revisit in Phase 8.
 const ALLOWED_ORIGINS = new Set([
@@ -48,6 +71,20 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (url === "/session") {
+    const origin = req.headers.origin ?? req.headers.referer;
+    if (origin && ![...ALLOWED_ORIGINS].some((o) => String(origin).startsWith(o))) {
+      res.writeHead(403);
+      res.end("Forbidden");
+      return;
+    }
+    const token = crypto.randomBytes(24).toString("base64url");
+    sessionTokens.set(token, Date.now() + SESSION_TOKEN_TTL_MS);
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ token }));
+    return;
+  }
+
   const relPath = url === "/" ? "index.html" : url.replace(/^\/+/, "");
   const filePath = path.resolve(PUBLIC_DIR, relPath);
   if (!filePath.startsWith(PUBLIC_DIR + path.sep) && filePath !== PUBLIC_DIR) {
@@ -71,10 +108,27 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({
   server,
   maxPayload: 1024 * 1024, // 1 MiB cap on inbound messages
-  verifyClient: ({ origin }: { origin?: string }) => {
-    if (!origin || ALLOWED_ORIGINS.has(origin)) return true;
-    log(`WS rejected: bad origin ${origin}`);
-    return false;
+  verifyClient: ({ origin, req }: { origin?: string; req: http.IncomingMessage }) => {
+    // 1. Origin allowlist
+    if (origin && !ALLOWED_ORIGINS.has(origin)) {
+      log(`WS rejected: bad origin ${origin}`);
+      return false;
+    }
+    // 2. Short-lived single-use session token
+    const token = new URL(req.url ?? "/", "http://x").searchParams.get("token") ?? "";
+    const expiry = sessionTokens.get(token);
+    if (!expiry || expiry < Date.now()) {
+      log("WS rejected: missing/expired session token");
+      return false;
+    }
+    sessionTokens.delete(token); // single-use
+    // 3. Concurrent connections per IP
+    const ip = req.socket.remoteAddress ?? "unknown";
+    if ((connsPerIp.get(ip) ?? 0) >= MAX_CONNS_PER_IP) {
+      log(`WS rejected: too many connections from ${ip}`);
+      return false;
+    }
+    return true;
   },
 });
 
@@ -82,8 +136,30 @@ function sendJson(ws: WebSocket, obj: unknown): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 
-wss.on("connection", (ws: WebSocket) => {
+wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
+  const ip = req.socket.remoteAddress ?? "unknown";
+  connsPerIp.set(ip, (connsPerIp.get(ip) ?? 0) + 1);
   log("connected");
+
+  // Idle timeout: no mic audio for IDLE_TIMEOUT_MS -> clean close.
+  let lastActivityMs = Date.now();
+  const idleTimer = setInterval(() => {
+    if (Date.now() - lastActivityMs > IDLE_TIMEOUT_MS) {
+      log("idle timeout — closing session");
+      sendJson(ws, { type: "session_ended" });
+      ws.close();
+    }
+  }, 30_000);
+
+  // Per-session LLM rate limit (sliding window).
+  const llmCallTimes: number[] = [];
+  function allowLlmCall(): boolean {
+    const now = Date.now();
+    while (llmCallTimes.length > 0 && llmCallTimes[0] < now - 60_000) llmCallTimes.shift();
+    if (llmCallTimes.length >= LLM_CALLS_PER_MIN) return false;
+    llmCallTimes.push(now);
+    return true;
+  }
 
   let stt: SttSession | null = null;
   let sttOpen = false;
@@ -149,6 +225,8 @@ wss.on("connection", (ws: WebSocket) => {
     },
     log,
     onFatal: failSession,
+    allowReply: allowLlmCall,
+    redact,
   });
 
   function startStt(): void {
@@ -174,7 +252,7 @@ wss.on("connection", (ws: WebSocket) => {
             if (speechEndWallMs !== null) gapMs = Math.round(Date.now() - speechEndWallMs);
             log(
               `stt: ${t.event} turn=${t.turnIndex} conf=${t.endOfTurnConfidence?.toFixed(2)} ` +
-                `gap=${gapMs !== null ? gapMs + "ms" : "n/a"} transcript="${t.transcript}"`
+                `gap=${gapMs !== null ? gapMs + "ms" : "n/a"} transcript="${redact(t.transcript)}"`
             );
             if (t.event === "EagerEndOfTurn") {
               turn.onEagerEndOfTurn(t.transcript, speechEndWallMs);
@@ -229,6 +307,7 @@ wss.on("connection", (ws: WebSocket) => {
       frames++;
       audioForwardedSec += (data as Buffer).length / BYTES_PER_SEC;
       lastFrameWallMs = Date.now();
+      lastActivityMs = lastFrameWallMs;
       stt.sendAudio(data as Buffer);
       if (frames % 200 === 0) log(`audio: ${frames} frames forwarded to stt`);
       return;
@@ -252,6 +331,10 @@ wss.on("connection", (ws: WebSocket) => {
   });
 
   ws.on("close", () => {
+    clearInterval(idleTimer);
+    const n = (connsPerIp.get(ip) ?? 1) - 1;
+    if (n <= 0) connsPerIp.delete(ip);
+    else connsPerIp.set(ip, n);
     stt?.close();
     stt = null;
     turn.onDisconnect();

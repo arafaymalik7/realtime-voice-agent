@@ -18,6 +18,10 @@ export interface TurnDeps {
   log: (msg: string) => void;
   /** Unrecoverable component failure: speak the fallback line and end the session. */
   onFatal: (e: { source: string; code: string; message: string }) => void;
+  /** Rate limiter: may this session start another LLM reply right now? */
+  allowReply: () => boolean;
+  /** PII gate for logging user speech / reply text. */
+  redact: (text: string) => string;
 }
 
 export class TurnManager {
@@ -136,9 +140,14 @@ export class TurnManager {
   }
 
   private startReply(transcript: string, speechEndWallMs: number | null, live: boolean): void {
-    const { llm, createTts, sendJson, log } = this.deps;
+    const { llm, createTts, sendJson, log, redact } = this.deps;
     if (!llm) {
       this.deps.onFatal({ source: "llm", code: "NO_API_KEY", message: "GEMINI_API_KEY not set" });
+      return;
+    }
+    if (!this.deps.allowReply()) {
+      log("rate limit: LLM reply refused — session over per-minute cap");
+      sendJson({ type: "error", source: "session", code: "RATE_LIMITED", message: "Too many requests — please slow down." });
       return;
     }
 
@@ -177,7 +186,7 @@ export class TurnManager {
     this.tts = replyTts;
 
     sendJson({ type: "speech_end", wallMs: speechEndWallMs });
-    log(`llm: request sent for "${transcript}"`);
+    log(`llm: request sent for "${redact(transcript)}"`);
 
     void llm.respond(
       transcript,
@@ -193,17 +202,17 @@ export class TurnManager {
         },
         onToolCall: (name, args) => {
           if (abort.signal.aborted) return;
-          log(`tool: CALL ${name}(${JSON.stringify(args)})`);
+          log(`tool: CALL ${name}(${redact(JSON.stringify(args))})`);
           sendJson({ type: "tool_call", name, args });
         },
         onToolResult: (name, result) => {
           if (abort.signal.aborted) return;
-          log(`tool: RESULT ${name} -> ${JSON.stringify(result)}`);
+          log(`tool: RESULT ${name} -> ${redact(JSON.stringify(result))}`);
           sendJson({ type: "tool_result", name, result });
         },
         onDone: (fullText) => {
           if (abort.signal.aborted) return;
-          log(`llm: done reply="${fullText}"`);
+          log(`llm: done reply="${redact(fullText)}"`);
           sendJson({ type: "agent_done" });
           replyTts?.end();
         },

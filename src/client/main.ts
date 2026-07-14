@@ -14,7 +14,10 @@ function setMic(text: string, cls: string): void {
 }
 
 const proto = location.protocol === "https:" ? "wss" : "ws";
-const ws = new WebSocket(`${proto}://${location.host}`);
+// Session token first (short-lived, single-use), then connect.
+const sessionRes = await fetch("/session");
+const { token } = (await sessionRes.json()) as { token: string };
+const ws = new WebSocket(`${proto}://${location.host}/?token=${encodeURIComponent(token)}`);
 ws.binaryType = "arraybuffer";
 
 // --- Agent speech playback (Phase 4) ---

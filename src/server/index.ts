@@ -4,8 +4,9 @@ import fs from "fs";
 import path from "path";
 import { WebSocketServer, WebSocket } from "ws";
 import { SttSession, TurnEvent, SttError } from "./stt";
-import { LlmClient, LlmError } from "./llm";
+import { LlmClient } from "./llm";
 import { TtsStream } from "./tts";
+import { TurnManager } from "./turn";
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.resolve(__dirname, "..", "..", "public");
@@ -13,6 +14,11 @@ const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY ?? "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY ?? "";
 const TTS_VOICE_ID = process.env.TTS_VOICE_ID ?? "EXAVITQu4vr4xnSDxMaL"; // Sarah (premade)
+
+// Endpointing (tuned Phase 5): final threshold high so real pauses don't cut the
+// user off; eager threshold low so replies start early (voided on TurnResumed).
+const EOT_THRESHOLD = 0.7;
+const EAGER_EOT_THRESHOLD = 0.4;
 
 // Origins allowed to open a WebSocket. Localhost only for now; revisit in Phase 8.
 const ALLOWED_ORIGINS = new Set([
@@ -92,117 +98,27 @@ wss.on("connection", (ws: WebSocket) => {
     return lastFrameWallMs - (audioForwardedSec - posSec) * 1000;
   }
 
-  // --- LLM (Phase 3) ---
+  // --- Turn manager: owns the reply lifecycle and the state machine ---
   const llm = GEMINI_API_KEY ? new LlmClient(GEMINI_API_KEY) : null;
   llm?.warmup(); // pre-establish the HTTPS connection while the user is still silent
-  let llmAbort: AbortController | null = null;
 
-  let tts: TtsStream | null = null;
-
-  // Eager-reply state: a reply started on EagerEndOfTurn buffers its audio until
-  // EndOfTurn confirms the turn really ended (flush) or TurnResumed voids it (discard).
-  let replyTranscript: string | null = null; // transcript the in-flight reply answers
-  let replyLive = false; // false = buffering, true = streaming to client
-  let replyBuffer: Buffer[] = [];
-  let replyFirstByteSent = false;
-  let replySpeechEndWallMs: number | null = null;
-
-  function stopReply(): void {
-    llmAbort?.abort();
-    tts?.abort();
-    tts = null;
-    replyTranscript = null;
-    replyLive = false;
-    replyBuffer = [];
-    replyFirstByteSent = false;
-  }
-
-  function deliverAudio(pcm: Buffer): void {
-    if (ws.readyState !== WebSocket.OPEN) return;
-    if (!replyFirstByteSent) {
-      replyFirstByteSent = true;
-      const headline = replySpeechEndWallMs !== null ? Date.now() - replySpeechEndWallMs : null;
-      log(`tts: first audio byte to client (headline speech-end -> first-byte ${headline}ms)`);
-      sendJson(ws, { type: "metric", name: "headline_server_ms", value: headline });
-    }
-    ws.send(pcm);
-  }
-
-  /** EndOfTurn confirmed the eager reply: stream buffered audio + go live. */
-  function confirmReply(): void {
-    replyLive = true;
-    for (const pcm of replyBuffer) deliverAudio(pcm);
-    replyBuffer = [];
-  }
-
-  function respondTo(transcript: string, speechEndWallMs: number | null, live: boolean): void {
-    if (!llm) {
-      const err = { source: "llm", code: "NO_API_KEY", message: "GEMINI_API_KEY not set" };
-      log(`ERROR ${JSON.stringify(err)}`);
-      sendJson(ws, { type: "error", ...err });
-      return;
-    }
-    // Only one reply in flight; a new user turn supersedes the old reply.
-    stopReply();
-    const abort = new AbortController();
-    llmAbort = abort;
-    replyTranscript = transcript;
-    replyLive = live;
-    replySpeechEndWallMs = speechEndWallMs;
-
-    // Open the TTS stream now — its handshake overlaps LLM inference.
-    let replyTts: TtsStream | null = null;
-    if (ELEVENLABS_API_KEY) {
-      replyTts = new TtsStream(ELEVENLABS_API_KEY, TTS_VOICE_ID, {
-        onAudio: (pcm) => {
-          if (replyLive) deliverAudio(pcm);
-          else replyBuffer.push(pcm);
-        },
-        onDone: () => {
-          sendJson(ws, { type: "tts_done" });
-        },
-        onError: (e) => {
-          log(`ERROR ${JSON.stringify(e)}`);
-          sendJson(ws, { type: "error", ...e });
-        },
-      });
-      tts = replyTts;
-    } else {
-      const err = { source: "tts", code: "NO_API_KEY", message: "ELEVENLABS_API_KEY not set" };
-      log(`ERROR ${JSON.stringify(err)}`);
-      sendJson(ws, { type: "error", ...err });
-    }
-
-    // Tell the client when the user's speech ended (its clock == our clock host-wise;
-    // used for the end-to-end headline measurement at the playback edge).
-    sendJson(ws, { type: "speech_end", wallMs: speechEndWallMs });
-
-    log(`llm: request sent for "${transcript}"`);
-    void llm.respond(
-      transcript,
-      {
-        onFirstToken: (latencyMs) => {
-          log(`llm: first token in ${latencyMs}ms`);
-          sendJson(ws, { type: "metric", name: "llm_first_token_ms", value: latencyMs });
-        },
-        onDelta: (text) => {
-          sendJson(ws, { type: "agent", delta: text });
-          replyTts?.sendText(text);
-        },
-        onDone: (fullText) => {
-          log(`llm: done reply="${fullText}"`);
-          sendJson(ws, { type: "agent_done" });
-          replyTts?.end();
-        },
-        onError: (e: LlmError) => {
-          log(`ERROR ${JSON.stringify(e)}`);
-          sendJson(ws, { type: "error", ...e });
-          replyTts?.abort();
-        },
-      },
-      abort.signal
-    );
-  }
+  const turn = new TurnManager({
+    llm,
+    createTts: (events) => {
+      if (!ELEVENLABS_API_KEY) {
+        const err = { source: "tts", code: "NO_API_KEY", message: "ELEVENLABS_API_KEY not set" };
+        log(`ERROR ${JSON.stringify(err)}`);
+        sendJson(ws, { type: "error", ...err });
+        return null;
+      }
+      return new TtsStream(ELEVENLABS_API_KEY, TTS_VOICE_ID, events);
+    },
+    sendJson: (obj) => sendJson(ws, obj),
+    sendAudio: (pcm) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(pcm);
+    },
+    log,
+  });
 
   function startStt(): void {
     if (!DEEPGRAM_API_KEY) {
@@ -211,59 +127,48 @@ wss.on("connection", (ws: WebSocket) => {
       sendJson(ws, { type: "error", ...err });
       return;
     }
-    stt = new SttSession(DEEPGRAM_API_KEY, {
-      onOpen: () => {
-        sttOpen = true;
-        log("stt: Deepgram Flux connected");
-      },
-      onTurn: (t: TurnEvent) => {
-        sendJson(ws, { type: "stt", event: t.event, transcript: t.transcript, turnIndex: t.turnIndex });
-        if (t.event === "EndOfTurn" || t.event === "EagerEndOfTurn") {
-          // Gap between the end of the last spoken word (mapped to wall clock)
-          // and this event's arrival = end-of-speech -> turn-signal latency.
-          let gapMs: number | null = null;
-          if (t.lastWordEnd !== null && lastFrameWallMs > 0) {
-            gapMs = Math.round(Date.now() - wallAt(t.lastWordEnd));
-          }
-          log(
-            `stt: ${t.event} turn=${t.turnIndex} conf=${t.endOfTurnConfidence?.toFixed(2)} ` +
-              `gap=${gapMs !== null ? gapMs + "ms" : "n/a"} transcript="${t.transcript}"`
-          );
+    stt = new SttSession(
+      DEEPGRAM_API_KEY,
+      {
+        onOpen: () => {
+          sttOpen = true;
+          log("stt: Deepgram Flux connected");
+        },
+        onTurn: (t: TurnEvent) => {
+          sendJson(ws, { type: "stt", event: t.event, transcript: t.transcript, turnIndex: t.turnIndex });
+
           const speechEndWallMs =
             t.lastWordEnd !== null && lastFrameWallMs > 0 ? Math.round(wallAt(t.lastWordEnd)) : null;
 
-          if (t.event === "EagerEndOfTurn" && t.transcript.trim().length > 0) {
-            // Head start: run LLM+TTS now, buffer the audio until the turn is confirmed.
-            if (replyTranscript !== t.transcript) {
-              respondTo(t.transcript, speechEndWallMs, /* live */ false);
+          if (t.event === "EndOfTurn" || t.event === "EagerEndOfTurn") {
+            let gapMs: number | null = null;
+            if (speechEndWallMs !== null) gapMs = Math.round(Date.now() - speechEndWallMs);
+            log(
+              `stt: ${t.event} turn=${t.turnIndex} conf=${t.endOfTurnConfidence?.toFixed(2)} ` +
+                `gap=${gapMs !== null ? gapMs + "ms" : "n/a"} transcript="${t.transcript}"`
+            );
+            if (t.event === "EagerEndOfTurn") {
+              turn.onEagerEndOfTurn(t.transcript, speechEndWallMs);
+            } else {
+              sendJson(ws, { type: "metric", name: "eot_gap_ms", value: gapMs });
+              turn.onEndOfTurn(t.transcript, speechEndWallMs);
             }
-          } else if (t.event === "EndOfTurn") {
-            sendJson(ws, { type: "metric", name: "eot_gap_ms", value: gapMs });
-            if (t.transcript.trim().length > 0) {
-              if (replyTranscript === t.transcript && !replyLive) {
-                log("turn: eager reply confirmed, flushing buffered audio");
-                confirmReply();
-              } else {
-                respondTo(t.transcript, speechEndWallMs, /* live */ true);
-              }
-            }
+          } else if (t.event === "TurnResumed") {
+            log(`stt: TurnResumed turn=${t.turnIndex}`);
+            turn.onTurnResumed();
+          } else if (t.event === "StartOfTurn") {
+            log(`stt: StartOfTurn turn=${t.turnIndex}`);
+            turn.onStartOfTurn();
           }
-        } else if (t.event === "TurnResumed") {
-          log(`stt: TurnResumed turn=${t.turnIndex}`);
-          if (replyTranscript !== null && !replyLive) {
-            log("turn: user kept talking — voiding eager reply");
-            stopReply();
-          }
-        } else if (t.event !== "Update") {
-          log(`stt: ${t.event} turn=${t.turnIndex}`);
-        }
+        },
+        onError: (e: SttError) => {
+          log(`ERROR ${JSON.stringify(e)}`);
+          sendJson(ws, { type: "error", ...e });
+        },
+        onClose: () => log("stt: Deepgram connection closed"),
       },
-      onError: (e: SttError) => {
-        log(`ERROR ${JSON.stringify(e)}`);
-        sendJson(ws, { type: "error", ...e });
-      },
-      onClose: () => log("stt: Deepgram connection closed"),
-    }, { eotThreshold: 0.5, eagerEotThreshold: 0.4 }); // eager events drive early LLM start (Phase 3+); re-tune in Phase 5
+      { eotThreshold: EOT_THRESHOLD, eagerEotThreshold: EAGER_EOT_THRESHOLD }
+    );
     stt.connect();
   }
 
@@ -285,17 +190,31 @@ wss.on("connection", (ws: WebSocket) => {
       audioForwardedSec += (data as Buffer).length / BYTES_PER_SEC;
       lastFrameWallMs = Date.now();
       stt.sendAudio(data as Buffer);
-      if (frames % 100 === 0) log(`audio: ${frames} frames forwarded to stt`);
+      if (frames % 200 === 0) log(`audio: ${frames} frames forwarded to stt`);
+      return;
+    }
+
+    // Validate inbound text messages; reject unknown types (no trust in client JSON).
+    let msg: { type?: unknown; [k: string]: unknown };
+    try {
+      msg = JSON.parse((data as Buffer).toString());
+    } catch {
+      log("WS invalid JSON from client — ignored");
+      return;
+    }
+    if (msg.type === "barge_in") {
+      turn.onClientBargeIn();
+    } else if (msg.type === "client_metric" && typeof msg.name === "string" && typeof msg.value === "number") {
+      log(`client metric: ${msg.name}=${msg.value}ms`);
     } else {
-      // Validate inbound text messages; reject unknown types (no trust in client JSON).
-      log(`WS unexpected text message (${(data as Buffer).length}B) — ignored`);
+      log(`WS unknown message type "${String(msg.type)}" — rejected`);
     }
   });
 
   ws.on("close", () => {
     stt?.close();
     stt = null;
-    stopReply();
+    turn.onDisconnect();
     log(`disconnected (forwarded ${frames} audio frames)`);
   });
   ws.on("error", (err) => log(`WS error: ${err.message}`));
@@ -303,7 +222,7 @@ wss.on("connection", (ws: WebSocket) => {
 
 server.listen(PORT, () => {
   log(`Server listening on http://localhost:${PORT}`);
-  const missing = ["DEEPGRAM_API_KEY", "ANTHROPIC_API_KEY", "ELEVENLABS_API_KEY"].filter(
+  const missing = ["DEEPGRAM_API_KEY", "GEMINI_API_KEY", "ELEVENLABS_API_KEY"].filter(
     (k) => !process.env[k]
   );
   if (missing.length > 0) {

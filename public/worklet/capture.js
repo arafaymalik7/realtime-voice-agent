@@ -5,6 +5,11 @@
 const TARGET_RATE = 16000;
 const CHUNK_SAMPLES = 800; // 50 ms at 16 kHz
 
+// Voice activity detection (barge-in): windowed RMS with 2-window confirmation.
+// Window ~32 ms; two consecutive hot windows => voice (detection delay ~64 ms).
+const VAD_THRESHOLD = 0.015; // RMS; mic has AGC so speech sits well above this
+const VAD_RELEASE_WINDOWS = 10; // ~320 ms of quiet before "voice off"
+
 class CaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -14,6 +19,15 @@ class CaptureProcessor extends AudioWorkletProcessor {
     this.queuedLen = 0;
     this.chunk = new Int16Array(CHUNK_SAMPLES);
     this.chunkIdx = 0;
+
+    // VAD state
+    this.vadWindow = Math.round(sampleRate * 0.032); // samples per RMS window
+    this.vadAcc = 0;       // sum of squares in current window
+    this.vadCount = 0;     // samples in current window
+    this.vadHotStreak = 0;
+    this.vadQuietStreak = 0;
+    this.vadActive = false;
+    this.vadOnsetMs = 0;   // ms since first hot window when 'voice on' fires
   }
 
   _sampleAt(idx) {
@@ -32,6 +46,33 @@ class CaptureProcessor extends AudioWorkletProcessor {
     // Input buffers are reused by the engine — copy before queuing.
     this.queue.push(ch.slice());
     this.queuedLen += ch.length;
+
+    // --- VAD (runs on raw samples, independent of resampling) ---
+    for (let i = 0; i < ch.length; i++) {
+      this.vadAcc += ch[i] * ch[i];
+      this.vadCount++;
+      if (this.vadCount >= this.vadWindow) {
+        const rms = Math.sqrt(this.vadAcc / this.vadCount);
+        this.vadAcc = 0;
+        this.vadCount = 0;
+        if (rms >= VAD_THRESHOLD) {
+          this.vadHotStreak++;
+          this.vadQuietStreak = 0;
+          if (!this.vadActive && this.vadHotStreak >= 2) {
+            this.vadActive = true;
+            // Detection delay: the 2 windows we just confirmed over.
+            this.port.postMessage({ vad: true, detectMs: Math.round(2 * 32) });
+          }
+        } else {
+          this.vadQuietStreak++;
+          this.vadHotStreak = 0;
+          if (this.vadActive && this.vadQuietStreak >= VAD_RELEASE_WINDOWS) {
+            this.vadActive = false;
+            this.port.postMessage({ vad: false });
+          }
+        }
+      }
+    }
 
     // Linear-interpolation resample: consume while a neighbor pair is available.
     while (Math.floor(this.readPos) + 1 < this.queuedLen) {

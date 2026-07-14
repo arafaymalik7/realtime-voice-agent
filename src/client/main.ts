@@ -162,6 +162,18 @@ ws.addEventListener("message", (e: MessageEvent) => {
     agentLine.textContent += String(msg.delta);
   } else if (msg.type === "agent_done") {
     agentLine = null;
+  } else if (msg.type === "tool_call") {
+    const line = document.createElement("div");
+    line.style.color = "#888";
+    line.style.fontSize = "0.85em";
+    line.textContent = `⚙ ${msg.name}(${JSON.stringify(msg.args)})`;
+    transcriptEl.appendChild(line);
+  } else if (msg.type === "tool_result") {
+    const line = document.createElement("div");
+    line.style.color = "#888";
+    line.style.fontSize = "0.85em";
+    line.textContent = `⚙ → ${JSON.stringify(msg.result)}`;
+    transcriptEl.appendChild(line);
   } else if (msg.type === "metric" && msg.name === "eot_gap_ms") {
     latencyEl.textContent = `end-of-turn gap: ${msg.value} ms`;
   } else if (msg.type === "metric" && msg.name === "llm_first_token_ms") {

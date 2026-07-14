@@ -5,6 +5,7 @@ import path from "path";
 import { WebSocketServer, WebSocket } from "ws";
 import { SttSession, TurnEvent, SttError } from "./stt";
 import { LlmClient } from "./llm";
+import { createToolSet } from "./tools";
 import { TtsStream } from "./tts";
 import { TurnManager } from "./turn";
 
@@ -99,7 +100,7 @@ wss.on("connection", (ws: WebSocket) => {
   }
 
   // --- Turn manager: owns the reply lifecycle and the state machine ---
-  const llm = GEMINI_API_KEY ? new LlmClient(GEMINI_API_KEY) : null;
+  const llm = GEMINI_API_KEY ? new LlmClient(GEMINI_API_KEY, createToolSet()) : null;
   llm?.warmup(); // pre-establish the HTTPS connection while the user is still silent
 
   const turn = new TurnManager({

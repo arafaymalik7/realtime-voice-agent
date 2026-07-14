@@ -191,6 +191,16 @@ export class TurnManager {
           sendJson({ type: "agent", delta: text });
           replyTts?.sendText(text);
         },
+        onToolCall: (name, args) => {
+          if (abort.signal.aborted) return;
+          log(`tool: CALL ${name}(${JSON.stringify(args)})`);
+          sendJson({ type: "tool_call", name, args });
+        },
+        onToolResult: (name, result) => {
+          if (abort.signal.aborted) return;
+          log(`tool: RESULT ${name} -> ${JSON.stringify(result)}`);
+          sendJson({ type: "tool_result", name, result });
+        },
         onDone: (fullText) => {
           if (abort.signal.aborted) return;
           log(`llm: done reply="${fullText}"`);

@@ -11,6 +11,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Project professionalism: EditorConfig, Prettier, ESLint (flat config), CI
   lint/format gates, `.gitattributes`, CONTRIBUTING, SECURITY, Code of Conduct,
   issue/PR templates.
+- Unit test suite (27 tests via `node:test` + `tsx`): tools, config, the turn
+  state machine (network-free, via injected fakes), and the Groq SSE parser.
+  Wired into CI.
+- Typed `AgentConfig` module — persona, business name, timezone, slots, and
+  voice are now data (env-driven), the foundation for multi-tenant config.
+- Provider-neutral `Llm` interface + a Groq adapter (`LLM_PROVIDER=groq`) as a
+  low-latency alternative to Gemini.
+- Deployment: multi-stage `Dockerfile` (non-root, healthcheck), `.dockerignore`,
+  `fly.toml`, and a CI job that builds the image.
 
 ### Changed
 

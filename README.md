@@ -97,24 +97,25 @@ failure). It is evolving into a product: **an AI voice receptionist for local
 businesses** — a phone number (and web widget) that answers every call, books
 into a real calendar, answers FAQs, and hands off to a human when needed.
 
-| Milestone | Focus |
-|---|---|
-| **Public demo** | Dockerized deploy on HTTPS · Groq LLM for consistent latency · real calendar booking |
-| **Phone channel** | Twilio Media Streams → the existing PCM pipeline; a real number rings the agent |
-| **Multi-tenant** | Postgres + Redis; per-business config (persona, voice, hours, tools) — no code edits |
-| **Dashboard** | Auth · agent config UI · call history + transcripts + outcomes · analytics · Stripe billing |
-| **Trust** | Consent + recording, retention policy, encryption at rest, audit logs, knowledge-base FAQ |
-| **Quality** | Unit + integration + E2E tests, agent evals, OpenTelemetry tracing, Sentry |
+| Milestone         | Focus                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| **Public demo**   | Dockerized deploy on HTTPS · Groq LLM for consistent latency · real calendar booking        |
+| **Phone channel** | Twilio Media Streams → the existing PCM pipeline; a real number rings the agent             |
+| **Multi-tenant**  | Postgres + Redis; per-business config (persona, voice, hours, tools) — no code edits        |
+| **Dashboard**     | Auth · agent config UI · call history + transcripts + outcomes · analytics · Stripe billing |
+| **Trust**         | Consent + recording, retention policy, encryption at rest, audit logs, knowledge-base FAQ   |
+| **Quality**       | Unit + integration + E2E tests, agent evals, OpenTelemetry tracing, Sentry                  |
 
 Contributions and ideas welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Known limitations
 
 - **LLM headline jitter**: the free Gemini tier's first-token latency varies
-  (~550 ms median, up to ~1.3 s) — the documented reason the 1500 ms headline
-  target is hit in best case but not at median. Swapping `llm.ts` to Groq's
-  free tier is the known fix (not applied — this stack is intentionally kept
-  on 100%-free-tier providers).
+  (~550 ms median, up to ~1.3 s) — the reason the 1500 ms headline target is hit
+  in best case but not at median. A **Groq adapter** (`src/server/llm-groq.ts`,
+  behind the same `Llm` interface) is included as the low-latency alternative —
+  set `LLM_PROVIDER=groq` + `GROQ_API_KEY`. Its SSE/tool-call parsing is unit
+  tested; end-to-end behavior is pending verification against a live Groq key.
 - **TTS concurrency ceiling under rapid-fire interruption**: the eager-reply
   design opens a new ElevenLabs stream on every incremental transcript update;
   a real conversation's pacing stays well under ElevenLabs' free-tier

@@ -6,6 +6,8 @@ import crypto from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { SttSession, TurnEvent, SttError } from "./stt";
 import { LlmClient } from "./llm";
+import { GroqLlmClient } from "./llm-groq";
+import { Llm } from "./llm-types";
 import { createToolSet } from "./tools";
 import { TtsStream } from "./tts";
 import { defaultAgentConfig } from "./config";
@@ -16,6 +18,10 @@ const PORT = Number(process.env.PORT) || 3000;
 const PUBLIC_DIR = path.resolve(__dirname, "..", "..", "public");
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY ?? "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
+const GROQ_API_KEY = process.env.GROQ_API_KEY ?? "";
+// "gemini" (default) or "groq". Groq is lower-latency but its adapter is
+// pending live verification — see src/server/llm-groq.ts.
+const LLM_PROVIDER = process.env.LLM_PROVIDER ?? "gemini";
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY ?? "";
 
 // The agent this server answers as. One default for now; per-tenant config
@@ -221,9 +227,13 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
   }
 
   // --- Turn manager: owns the reply lifecycle and the state machine ---
-  const llm = GEMINI_API_KEY
-    ? new LlmClient(GEMINI_API_KEY, createToolSet(AGENT_CONFIG.slots), AGENT_CONFIG)
-    : null;
+  const tools = createToolSet(AGENT_CONFIG.slots);
+  let llm: Llm | null = null;
+  if (LLM_PROVIDER === "groq" && GROQ_API_KEY) {
+    llm = new GroqLlmClient(GROQ_API_KEY, tools, AGENT_CONFIG);
+  } else if (GEMINI_API_KEY) {
+    llm = new LlmClient(GEMINI_API_KEY, tools, AGENT_CONFIG);
+  }
   llm?.warmup(); // pre-establish the HTTPS connection while the user is still silent
 
   const turn = new TurnManager({

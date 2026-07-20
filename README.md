@@ -1,6 +1,13 @@
 # Realtime Voice Agent
 
+[![CI](https://github.com/arafaymalik7/realtime-voice-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/arafaymalik7/realtime-voice-agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6.svg)](tsconfig.json)
+[![Node](https://img.shields.io/badge/Node-22-339933.svg)](https://nodejs.org)
+
 A browser-based real-time voice AI agent: speak into your mic, the agent listens, thinks, and talks back — interruptible mid-sentence, with sub-second turn detection.
+
+> **Barge-in stops the agent in 64 ms. End-of-speech to first agent audio: ~1.5 s.** Every number in this README comes from a real measured run, logged by the built-in instrumentation.
 
 A clean, animated single-page UI shows the conversation as chat bubbles, a state orb (listening / thinking / speaking), live latency stat tiles, and tool-call activity — see [Screenshots](#ui) below.
 
@@ -68,9 +75,38 @@ Optional: `TTS_VOICE_ID` (defaults to a premade voice), `PORT` (default 3000).
 
 ## UI
 
+<p align="center">
+  <img src="docs/assets/ui-light.png" alt="Voice Agent UI, light theme — a booking conversation in progress" width="49%" />
+  <img src="docs/assets/ui-dark.png" alt="Voice Agent UI, dark theme — idle" width="49%" />
+</p>
+
 Vanilla HTML/CSS/TS, no framework. A validated status-color system (fixed
 good/warning/serious/critical hues, never re-themed) drives the state orb and
-stat-tile coloring; light/dark theme follows the OS. Files: [`public/index.html`](public/index.html), [`public/styles.css`](public/styles.css).
+stat-tile coloring; light/dark theme follows the OS. The state orb pulses
+through Listening → Thinking → Speaking, the transcript renders as chat bubbles,
+tool calls appear inline, and the four latency stat tiles color themselves
+green/amber/red against thresholds. Files: [`public/index.html`](public/index.html), [`public/styles.css`](public/styles.css).
+
+> A short screen recording of a live call is worth more than a static shot —
+> a demo GIF is on the roadmap ([#roadmap](#roadmap)).
+
+## Roadmap
+
+This started as a technical demo of the hard part (turn-taking, barge-in, safe
+failure). It is evolving into a product: **an AI voice receptionist for local
+businesses** — a phone number (and web widget) that answers every call, books
+into a real calendar, answers FAQs, and hands off to a human when needed.
+
+| Milestone | Focus |
+|---|---|
+| **Public demo** | Dockerized deploy on HTTPS · Groq LLM for consistent latency · real calendar booking |
+| **Phone channel** | Twilio Media Streams → the existing PCM pipeline; a real number rings the agent |
+| **Multi-tenant** | Postgres + Redis; per-business config (persona, voice, hours, tools) — no code edits |
+| **Dashboard** | Auth · agent config UI · call history + transcripts + outcomes · analytics · Stripe billing |
+| **Trust** | Consent + recording, retention policy, encryption at rest, audit logs, knowledge-base FAQ |
+| **Quality** | Unit + integration + E2E tests, agent evals, OpenTelemetry tracing, Sentry |
+
+Contributions and ideas welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Known limitations
 
@@ -92,7 +128,7 @@ stat-tile coloring; light/dark theme follows the OS. Files: [`public/index.html`
 - API keys live server-side only — never sent to the browser, never logged, never committed (`.env` is gitignored; history verified clean; built client bundle grepped for key patterns: zero hits).
 - WebSocket hardening: Origin allowlist, **short-lived single-use session tokens** (`GET /session`, 60 s TTL), max 3 concurrent connections per IP, 1 MiB inbound message cap, unknown message types rejected, 5-minute idle timeout.
 - **No PII in logs by default** — transcripts/replies/tool args are redacted unless `DEBUG_TRANSCRIPTS=1`. Audio is never logged.
-- Per-session LLM rate limit (20 calls/min) caps cost abuse.
+- Per-session LLM rate limit (60 calls/min) caps cost abuse.
 - Safe failure: every provider call has a timeout and retry cap; on unrecoverable failure the user hears a pre-cached spoken fallback line (or a tone if TTS itself is down) and the session ends cleanly — never a silent hang.
 - Least-privilege tools: each tool does one job; no shell, no arbitrary URLs.
 - Static file serving with path-traversal protection.

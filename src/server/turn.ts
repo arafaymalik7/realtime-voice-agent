@@ -4,13 +4,13 @@
 //   any       -> LISTENING (barge-in, void, or reply finished)
 // Owns the full reply lifecycle: eager start, confirm, void, barge-in stop.
 
-import { LlmClient, LlmError } from "./llm";
+import { Llm, LlmError } from "./llm-types";
 import { TtsStream, TtsEvents } from "./tts";
 
 export type TurnState = "LISTENING" | "THINKING" | "SPEAKING";
 
 export interface TurnDeps {
-  llm: LlmClient | null;
+  llm: Llm | null;
   /** Returns a fresh TTS stream for one reply, or null if TTS is unavailable. */
   createTts: (events: TtsEvents) => TtsStream | null;
   sendJson: (obj: unknown) => void;

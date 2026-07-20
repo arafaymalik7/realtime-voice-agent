@@ -9,29 +9,17 @@
 import { GoogleGenAI, Content, Part } from "@google/genai";
 import { ToolSet } from "./tools";
 import { AgentConfig, buildSystemInstruction } from "./config";
+import { Llm, LlmEvents, LlmError } from "./llm-types";
 
-export interface LlmError {
-  source: "llm";
-  code: string;
-  message: string;
-}
-
-export interface LlmEvents {
-  /** Fired once, on the first text delta. latencyMs = request send -> first token. */
-  onFirstToken: (latencyMs: number) => void;
-  onDelta: (text: string) => void;
-  onDone: (fullText: string) => void;
-  onError: (e: LlmError) => void;
-  onToolCall?: (name: string, args: Record<string, unknown>) => void;
-  onToolResult?: (name: string, result: Record<string, unknown>) => void;
-}
+// Re-export the provider-neutral types so existing importers keep working.
+export type { Llm, LlmEvents, LlmError } from "./llm-types";
 
 const MAX_HISTORY_TURNS = 20; // user+model messages kept for context
 const MAX_TOOL_ROUNDS = 4;
 const RESPONSE_TIMEOUT_MS = 15_000; // whole reply incl. tool rounds
 const MAX_ATTEMPTS = 2; // 1 retry, and only if nothing was emitted yet
 
-export class LlmClient {
+export class LlmClient implements Llm {
   private ai: GoogleGenAI;
   private history: Content[] = [];
 

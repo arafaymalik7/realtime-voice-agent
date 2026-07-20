@@ -9,7 +9,8 @@
     "dev": "npm run build && npm run start",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.11.0",
@@ -22,6 +23,7 @@
     "@types/ws": "^8.5.13",
     "eslint": "^10.7.0",
     "prettier": "^3.9.5",
+    "tsx": "^4.23.1",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.64.0"
   }

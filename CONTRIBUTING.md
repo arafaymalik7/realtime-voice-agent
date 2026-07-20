@@ -19,16 +19,16 @@ You'll need free-tier API keys for the three providers — see the
 
 ## Project layout
 
-| Path | Responsibility |
-|---|---|
-| `src/server/stt.ts` | Speech-to-text (Deepgram Flux) — audio in, turn events out |
-| `src/server/turn.ts` | Turn state machine — the core of the project |
-| `src/server/llm.ts` | LLM streaming + tool calling |
-| `src/server/tts.ts` | Text-to-speech (ElevenLabs) |
-| `src/server/tools.ts` | Agent tools (defined I/O, no side effects) |
-| `src/server/index.ts` | HTTP/WS server + wiring |
-| `src/client/main.ts` | Browser: mic capture, playback, barge-in, UI |
-| `public/worklet/capture.js` | AudioWorklet: resampling + voice-activity detection |
+| Path                        | Responsibility                                             |
+| --------------------------- | ---------------------------------------------------------- |
+| `src/server/stt.ts`         | Speech-to-text (Deepgram Flux) — audio in, turn events out |
+| `src/server/turn.ts`        | Turn state machine — the core of the project               |
+| `src/server/llm.ts`         | LLM streaming + tool calling                               |
+| `src/server/tts.ts`         | Text-to-speech (ElevenLabs)                                |
+| `src/server/tools.ts`       | Agent tools (defined I/O, no side effects)                 |
+| `src/server/index.ts`       | HTTP/WS server + wiring                                    |
+| `src/client/main.ts`        | Browser: mic capture, playback, barge-in, UI               |
+| `public/worklet/capture.js` | AudioWorklet: resampling + voice-activity detection        |
 
 Each provider lives behind a small interface so it can be swapped in one file —
 please keep that boundary intact when adding features.

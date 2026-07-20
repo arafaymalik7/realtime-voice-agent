@@ -16,5 +16,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build
-      - run: npm audit --audit-level=high
+      - name: Lint
+        run: npm run lint
+      - name: Format check
+        run: npm run format:check
+      - name: Build
+        run: npm run build
+      - name: Audit
+        run: npm audit --audit-level=high

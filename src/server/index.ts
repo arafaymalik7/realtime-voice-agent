@@ -8,6 +8,7 @@ import { SttSession, TurnEvent, SttError } from "./stt";
 import { LlmClient } from "./llm";
 import { createToolSet } from "./tools";
 import { TtsStream } from "./tts";
+import { defaultAgentConfig } from "./config";
 import { TurnManager } from "./turn";
 import { initFallback, getFallbackAudio, FALLBACK_LINE } from "./fallback";
 
@@ -16,7 +17,11 @@ const PUBLIC_DIR = path.resolve(__dirname, "..", "..", "public");
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY ?? "";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY ?? "";
-const TTS_VOICE_ID = process.env.TTS_VOICE_ID ?? "EXAVITQu4vr4xnSDxMaL"; // Sarah (premade)
+
+// The agent this server answers as. One default for now; per-tenant config
+// (looked up per connection) is the multi-tenancy path on the roadmap.
+const AGENT_CONFIG = defaultAgentConfig();
+const TTS_VOICE_ID = AGENT_CONFIG.voiceId;
 
 // Endpointing (tuned Phase 5): final threshold high so real pauses don't cut the
 // user off; eager threshold low so replies start early (voided on TurnResumed).
@@ -216,7 +221,9 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
   }
 
   // --- Turn manager: owns the reply lifecycle and the state machine ---
-  const llm = GEMINI_API_KEY ? new LlmClient(GEMINI_API_KEY, createToolSet()) : null;
+  const llm = GEMINI_API_KEY
+    ? new LlmClient(GEMINI_API_KEY, createToolSet(AGENT_CONFIG.slots), AGENT_CONFIG)
+    : null;
   llm?.warmup(); // pre-establish the HTTPS connection while the user is still silent
 
   const turn = new TurnManager({

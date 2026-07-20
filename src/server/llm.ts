@@ -8,6 +8,7 @@
 
 import { GoogleGenAI, Content, Part } from "@google/genai";
 import { ToolSet } from "./tools";
+import { AgentConfig, buildSystemInstruction } from "./config";
 
 export interface LlmError {
   source: "llm";
@@ -25,23 +26,6 @@ export interface LlmEvents {
   onToolResult?: (name: string, result: Record<string, unknown>) => void;
 }
 
-function systemInstruction(): string {
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10);
-  const weekday = now.toLocaleDateString("en-US", { weekday: "long" });
-  return (
-    "You are a friendly voice assistant on a phone-style call for a small clinic. " +
-    "Reply in short, natural spoken sentences — no markdown, no lists, no emoji. " +
-    "Be concise: one or two sentences unless the caller asks for more. " +
-    `Today is ${weekday}, ${today}. ` +
-    "You can book appointments. When the caller wants one: call check_availability " +
-    "for the requested date first. If they named only a general time of day (morning, " +
-    "afternoon), pick the matching open slot yourself and book it immediately — do not " +
-    "ask them to choose. Always call book_appointment to actually book; never claim a " +
-    "booking without it. After booking, read back the time and the confirmation code."
-  );
-}
-
 const MAX_HISTORY_TURNS = 20; // user+model messages kept for context
 const MAX_TOOL_ROUNDS = 4;
 const RESPONSE_TIMEOUT_MS = 15_000; // whole reply incl. tool rounds
@@ -54,6 +38,7 @@ export class LlmClient {
   constructor(
     apiKey: string,
     private tools: ToolSet | null = null,
+    private config: AgentConfig,
     private model: string = "gemini-3.1-flash-lite"
   ) {
     this.ai = new GoogleGenAI({ apiKey });
@@ -121,7 +106,7 @@ export class LlmClient {
     }, RESPONSE_TIMEOUT_MS);
 
     const config: Record<string, unknown> = {
-      systemInstruction: systemInstruction(),
+      systemInstruction: buildSystemInstruction(this.config, new Date()),
       abortSignal: ac.signal,
     };
     if (this.tools) {

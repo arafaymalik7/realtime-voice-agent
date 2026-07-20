@@ -1,6 +1,6 @@
 // tools.ts — one function per tool, defined inputs/outputs, no side effects
-// beyond the tool's one job. Demo booking system: deterministic fake slots,
-// in-memory bookings per session.
+// beyond the tool's one job. Demo booking system: deterministic slots from the
+// agent config, in-memory bookings per session.
 
 export interface ToolDeclaration {
   name: string;
@@ -14,8 +14,6 @@ export interface ToolSet {
   execute(name: string, args: Record<string, unknown>): Record<string, unknown>;
 }
 
-const SLOTS = ["10:00", "11:30", "14:30", "16:00"]; // fixed demo availability
-
 function newConfirmationId(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let id = "";
@@ -23,7 +21,8 @@ function newConfirmationId(): string {
   return `APT-${id}`;
 }
 
-export function createToolSet(): ToolSet {
+export function createToolSet(slots: string[]): ToolSet {
+  const SLOTS = slots;
   // Session-scoped state: bookings made during this call.
   const bookings = new Map<string, { slot: string; date: string; name: string }>();
 

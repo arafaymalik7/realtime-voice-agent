@@ -21,7 +21,10 @@ function setMic(text: string, status: "ok" | "err" | "warn"): void {
   micText.textContent = text;
   micPill.dataset.status = status;
 }
-function setOrbState(state: "idle" | "listening" | "thinking" | "speaking" | "error", label: string): void {
+function setOrbState(
+  state: "idle" | "listening" | "thinking" | "speaking" | "error",
+  label: string
+): void {
   orb.dataset.state = state;
   stateLabel.textContent = label;
 }

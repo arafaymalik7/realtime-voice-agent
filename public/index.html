@@ -1,73 +1,77 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Voice Agent</title>
-  <link rel="stylesheet" href="/styles.css" />
-</head>
-<body>
-  <div class="page">
-    <header class="topbar">
-      <div class="brand">
-        <div class="brand-mark" aria-hidden="true"></div>
-        <h1>Voice Agent</h1>
-      </div>
-      <div class="pill" id="conn-pill" data-status="warn">
-        <span class="dot"></span>
-        <span id="conn-text">connecting…</span>
-      </div>
-    </header>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Voice Agent</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <h1>Voice Agent</h1>
+        </div>
+        <div class="pill" id="conn-pill" data-status="warn">
+          <span class="dot"></span>
+          <span id="conn-text">connecting…</span>
+        </div>
+      </header>
 
-    <main style="display:flex; flex-direction:column; gap:1.25rem;">
-      <section class="call-card">
-        <div class="orb-wrap">
-          <div class="orb" id="orb" data-state="idle" aria-hidden="true"></div>
-        </div>
-        <div class="state-label" id="state-label">Idle</div>
-        <div class="mic-row">
-          <span class="pill" id="mic-pill" data-status="err">
-            <span class="dot"></span>
-            <span id="mic-text">Mic off</span>
-          </span>
-        </div>
-        <div class="controls">
-          <button id="start" class="btn btn-primary">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2Z"/></svg>
-            Start
-          </button>
-          <button id="stop" class="btn btn-ghost" disabled>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
-            End
-          </button>
-        </div>
-      </section>
+      <main style="display: flex; flex-direction: column; gap: 1.25rem">
+        <section class="call-card">
+          <div class="orb-wrap">
+            <div class="orb" id="orb" data-state="idle" aria-hidden="true"></div>
+          </div>
+          <div class="state-label" id="state-label">Idle</div>
+          <div class="mic-row">
+            <span class="pill" id="mic-pill" data-status="err">
+              <span class="dot"></span>
+              <span id="mic-text">Mic off</span>
+            </span>
+          </div>
+          <div class="controls">
+            <button id="start" class="btn btn-primary">
+              <svg viewBox="0 0 24 24" fill="currentColor">
+                <path
+                  d="M12 14a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2Z"
+                />
+              </svg>
+              Start
+            </button>
+            <button id="stop" class="btn btn-ghost" disabled>
+              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z" /></svg>
+              End
+            </button>
+          </div>
+        </section>
 
-      <section class="stats" aria-label="Latency metrics">
-        <div class="stat-tile">
-          <div class="stat-label">End of turn</div>
-          <div class="stat-value" id="stat-eot">—</div>
-        </div>
-        <div class="stat-tile">
-          <div class="stat-label">LLM first token</div>
-          <div class="stat-value" id="stat-llm">—</div>
-        </div>
-        <div class="stat-tile">
-          <div class="stat-label">Speech → audio</div>
-          <div class="stat-value" id="stat-headline">—</div>
-        </div>
-        <div class="stat-tile">
-          <div class="stat-label">Barge-in stop</div>
-          <div class="stat-value" id="stat-barge">—</div>
-        </div>
-      </section>
+        <section class="stats" aria-label="Latency metrics">
+          <div class="stat-tile">
+            <div class="stat-label">End of turn</div>
+            <div class="stat-value" id="stat-eot">—</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-label">LLM first token</div>
+            <div class="stat-value" id="stat-llm">—</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-label">Speech → audio</div>
+            <div class="stat-value" id="stat-headline">—</div>
+          </div>
+          <div class="stat-tile">
+            <div class="stat-label">Barge-in stop</div>
+            <div class="stat-value" id="stat-barge">—</div>
+          </div>
+        </section>
 
-      <section class="transcript-card">
-        <div class="transcript-header">Conversation</div>
-        <div class="transcript" id="transcript" aria-live="polite"></div>
-      </section>
-    </main>
-  </div>
-  <script type="module" src="/js/main.js"></script>
-</body>
+        <section class="transcript-card">
+          <div class="transcript-header">Conversation</div>
+          <div class="transcript" id="transcript" aria-live="polite"></div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/js/main.js"></script>
+  </body>
 </html>

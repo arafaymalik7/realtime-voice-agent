@@ -132,7 +132,9 @@ export class TurnManager {
     if (!this.firstByteSent) {
       this.firstByteSent = true;
       const headline = this.speechEndWallMs !== null ? Date.now() - this.speechEndWallMs : null;
-      this.deps.log(`tts: first audio byte to client (headline speech-end -> first-byte ${headline}ms)`);
+      this.deps.log(
+        `tts: first audio byte to client (headline speech-end -> first-byte ${headline}ms)`
+      );
       this.deps.sendJson({ type: "metric", name: "headline_server_ms", value: headline });
       this.setState("SPEAKING", "first audio byte delivered");
     }

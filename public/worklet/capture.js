@@ -14,20 +14,20 @@ class CaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.step = sampleRate / TARGET_RATE;
-    this.readPos = 0;      // fractional read position into the queued stream
-    this.queue = [];       // queued Float32Array blocks (copies)
+    this.readPos = 0; // fractional read position into the queued stream
+    this.queue = []; // queued Float32Array blocks (copies)
     this.queuedLen = 0;
     this.chunk = new Int16Array(CHUNK_SAMPLES);
     this.chunkIdx = 0;
 
     // VAD state
     this.vadWindow = Math.round(sampleRate * 0.032); // samples per RMS window
-    this.vadAcc = 0;       // sum of squares in current window
-    this.vadCount = 0;     // samples in current window
+    this.vadAcc = 0; // sum of squares in current window
+    this.vadCount = 0; // samples in current window
     this.vadHotStreak = 0;
     this.vadQuietStreak = 0;
     this.vadActive = false;
-    this.vadOnsetMs = 0;   // ms since first hot window when 'voice on' fires
+    this.vadOnsetMs = 0; // ms since first hot window when 'voice on' fires
   }
 
   _sampleAt(idx) {

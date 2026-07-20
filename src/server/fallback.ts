@@ -4,8 +4,7 @@
 // startup, a generated attention tone is cached instead (the client also shows
 // the failure as text, so the user is never left guessing).
 
-export const FALLBACK_LINE =
-  "Sorry, I'm having trouble right now. Let me get a human to help you.";
+export const FALLBACK_LINE = "Sorry, I'm having trouble right now. Let me get a human to help you.";
 
 const SAMPLE_RATE = 16000;
 
@@ -23,7 +22,9 @@ function generateTonePcm(): Buffer {
     const len = Math.round(SAMPLE_RATE * beepSec);
     for (let i = 0; i < len; i++) {
       const env = Math.sin((Math.PI * i) / len); // fade in/out, no clicks
-      pcm[start + i] = Math.round(Math.sin((2 * Math.PI * 440 * i) / SAMPLE_RATE) * env * 0.3 * 0x7fff);
+      pcm[start + i] = Math.round(
+        Math.sin((2 * Math.PI * 440 * i) / SAMPLE_RATE) * env * 0.3 * 0x7fff
+      );
     }
   }
   return Buffer.from(pcm.buffer);

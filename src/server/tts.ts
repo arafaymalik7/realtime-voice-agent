@@ -33,7 +33,11 @@ export class TtsStream {
   private gotAudio = false;
   private timeout: NodeJS.Timeout | null = null;
 
-  constructor(apiKey: string, voiceId: string, private events: TtsEvents) {
+  constructor(
+    apiKey: string,
+    voiceId: string,
+    private events: TtsEvents
+  ) {
     const url =
       `wss://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream-input` +
       `?model_id=${TTS_MODEL}&output_format=${OUTPUT_FORMAT}`;
@@ -82,7 +86,10 @@ export class TtsStream {
     this.ws.on("close", () => this.finish());
     this.ws.on("error", (err) => this.fail("WS_ERROR", err.message));
     this.ws.on("unexpected-response", (_req, res) => {
-      this.fail(`HTTP_${res.statusCode}`, `ElevenLabs rejected connection (HTTP ${res.statusCode})`);
+      this.fail(
+        `HTTP_${res.statusCode}`,
+        `ElevenLabs rejected connection (HTTP ${res.statusCode})`
+      );
     });
 
     this.timeout = setTimeout(() => {

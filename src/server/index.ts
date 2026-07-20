@@ -51,10 +51,7 @@ setInterval(() => {
 const connsPerIp = new Map<string, number>();
 
 // Origins allowed to open a WebSocket. Localhost only for now; revisit in Phase 8.
-const ALLOWED_ORIGINS = new Set([
-  `http://localhost:${PORT}`,
-  `http://127.0.0.1:${PORT}`,
-]);
+const ALLOWED_ORIGINS = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]);
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -255,10 +252,17 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
         },
         onTurn: (t: TurnEvent) => {
           if (sessionOver) return; // late-arriving event after the session ended — ignore
-          sendJson(ws, { type: "stt", event: t.event, transcript: t.transcript, turnIndex: t.turnIndex });
+          sendJson(ws, {
+            type: "stt",
+            event: t.event,
+            transcript: t.transcript,
+            turnIndex: t.turnIndex,
+          });
 
           const speechEndWallMs =
-            t.lastWordEnd !== null && lastFrameWallMs > 0 ? Math.round(wallAt(t.lastWordEnd)) : null;
+            t.lastWordEnd !== null && lastFrameWallMs > 0
+              ? Math.round(wallAt(t.lastWordEnd))
+              : null;
 
           if (t.event === "EndOfTurn" || t.event === "EagerEndOfTurn") {
             let gapMs: number | null = null;
@@ -337,7 +341,11 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
     }
     if (msg.type === "barge_in") {
       turn.onClientBargeIn();
-    } else if (msg.type === "client_metric" && typeof msg.name === "string" && typeof msg.value === "number") {
+    } else if (
+      msg.type === "client_metric" &&
+      typeof msg.name === "string" &&
+      typeof msg.value === "number"
+    ) {
       log(`client metric: ${msg.name}=${msg.value}ms`);
     } else {
       log(`WS unknown message type "${String(msg.type)}" — rejected`);
@@ -360,7 +368,9 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
 
 void initFallback(ELEVENLABS_API_KEY, TTS_VOICE_ID).then(() => {
   const fb = getFallbackAudio();
-  log(`fallback audio cached: ${fb ? (fb.isTone ? "tone (TTS unavailable)" : `spoken line, ${fb.durationMs}ms`) : "none"}`);
+  log(
+    `fallback audio cached: ${fb ? (fb.isTone ? "tone (TTS unavailable)" : `spoken line, ${fb.durationMs}ms`) : "none"}`
+  );
 });
 
 server.listen(PORT, () => {

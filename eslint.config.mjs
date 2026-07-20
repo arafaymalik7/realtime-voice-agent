@@ -18,7 +18,11 @@ export default tseslint.config(
     // Browser worklet: plain JS with AudioWorklet globals.
     files: ["public/worklet/*.js"],
     languageOptions: {
-      globals: { sampleRate: "readonly", registerProcessor: "readonly", AudioWorkletProcessor: "readonly" },
+      globals: {
+        sampleRate: "readonly",
+        registerProcessor: "readonly",
+        AudioWorkletProcessor: "readonly",
+      },
     },
   }
 );

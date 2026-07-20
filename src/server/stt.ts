@@ -87,7 +87,11 @@ export class SttSession {
       try {
         msg = JSON.parse(raw.toString());
       } catch {
-        this.events.onError({ source: "stt", code: "BAD_JSON", message: "unparseable message from Deepgram" });
+        this.events.onError({
+          source: "stt",
+          code: "BAD_JSON",
+          message: "unparseable message from Deepgram",
+        });
         return;
       }
       if (msg.type === "TurnInfo") {

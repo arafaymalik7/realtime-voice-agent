@@ -79,7 +79,14 @@ export class LlmClient {
     let firstToken = true;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      const err = await this.attempt(userText, events, sentAt, () => firstToken, (v) => (firstToken = v), signal);
+      const err = await this.attempt(
+        userText,
+        events,
+        sentAt,
+        () => firstToken,
+        (v) => (firstToken = v),
+        signal
+      );
       if (err === null) return; // success, abort, or already-reported error
       // Retry only if nothing was spoken yet and we have attempts left.
       if (!firstToken || attempt === MAX_ATTEMPTS) {

@@ -1,0 +1,45 @@
+name: Bug report
+description: Report something that isn't working
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+      placeholder: The agent stopped responding after…
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start the server
+        2. Click Start and say "…"
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant server logs
+      description: Paste the server console output around the failure. Redact any secrets.
+      render: shell
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which part?
+      options:
+        - Not sure
+        - STT / transcription (Deepgram)
+        - LLM / reasoning (Gemini)
+        - TTS / voice (ElevenLabs)
+        - Turn-taking / barge-in
+        - UI
+        - Deployment / setup
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: "OS, Node version, browser"

@@ -1,0 +1,12 @@
+node_modules
+dist
+public/js
+.git
+.github
+.env
+.env.*
+*.log
+docs
+test
+.vscode
+.idea

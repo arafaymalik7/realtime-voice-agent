@@ -1,0 +1,38 @@
+# Fly.io deployment config.
+# First-time setup:
+#   fly launch --no-deploy        # creates the app (accept this fly.toml)
+#   fly secrets set DEEPGRAM_API_KEY=... GEMINI_API_KEY=... ELEVENLABS_API_KEY=...
+#   fly deploy
+# The Origin allowlist in src/server/index.ts must include your Fly hostname
+# (https://<app>.fly.dev) before the browser mic + WebSocket will work.
+
+app = "realtime-voice-agent"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  # WebSocket sessions are stateful — keep a request on the machine it started on.
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 50
+    soft_limit = 40
+
+[[http_service.checks]]
+  interval = "30s"
+  timeout = "3s"
+  grace_period = "5s"
+  method = "GET"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

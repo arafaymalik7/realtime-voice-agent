@@ -11,7 +11,7 @@ Do not write any code yet.
 Your first job is **Phase 0 only**. Before implementing it:
 
 1. Confirm you've read CLAUDE.md and restate the project's single hardest part in one sentence, so I know we're aligned.
-2. Verify current details you'll need soon by fetching the official docs for Deepgram streaming STT, the Anthropic Node SDK, and ElevenLabs streaming TTS. Do not code against them yet — just confirm the current model names, endpoints, and expected audio formats, and tell me anything that differs from what CLAUDE.md assumes.
+2. Verify current details you'll need soon by fetching the official docs for Deepgram streaming STT, the Anthropic Node SDK, and ElevenLabs streaming TTS. Do not code against them yet — just confirmGI the current model names, endpoints, and expected audio formats, and tell me anything that differs from what CLAUDE.md assumes.
 3. Give me a short written plan for Phase 0: the files you'll create, the folder structure, the exact CHECK you'll run, and the commands I'll run to verify.
 
 Then STOP and wait for my "go" before implementing. Do not plan past Phase 0.

@@ -2,6 +2,8 @@
 
 A browser-based real-time voice AI agent: speak into your mic, the agent listens, thinks, and talks back — interruptible mid-sentence, with sub-second turn detection.
 
+A clean, animated single-page UI shows the conversation as chat bubbles, a state orb (listening / thinking / speaking), live latency stat tiles, and tool-call activity — see [Screenshots](#ui) below.
+
 The core of this project is the **turn-taking loop**: streaming audio in, detecting when the human stops speaking, responding fast enough to feel alive, and stopping instantly when the human talks over the agent (barge-in).
 
 ## Architecture
@@ -63,6 +65,27 @@ Required keys (all have free tiers):
 | `ELEVENLABS_API_KEY` | [ElevenLabs](https://elevenlabs.io/) — streaming TTS (key needs the *Text to Speech* permission) |
 
 Optional: `TTS_VOICE_ID` (defaults to a premade voice), `PORT` (default 3000).
+
+## UI
+
+Vanilla HTML/CSS/TS, no framework. A validated status-color system (fixed
+good/warning/serious/critical hues, never re-themed) drives the state orb and
+stat-tile coloring; light/dark theme follows the OS. Files: [`public/index.html`](public/index.html), [`public/styles.css`](public/styles.css).
+
+## Known limitations
+
+- **LLM headline jitter**: the free Gemini tier's first-token latency varies
+  (~550 ms median, up to ~1.3 s) — the documented reason the 1500 ms headline
+  target is hit in best case but not at median. Swapping `llm.ts` to Groq's
+  free tier is the known fix (not applied — this stack is intentionally kept
+  on 100%-free-tier providers).
+- **TTS concurrency ceiling under rapid-fire interruption**: the eager-reply
+  design opens a new ElevenLabs stream on every incremental transcript update;
+  a real conversation's pacing stays well under ElevenLabs' free-tier
+  concurrent-stream cap, but a synthetic stress test with interruptions every
+  few seconds can exhaust it, surfacing as `tts: TIMEOUT`. Safe failure (Phase 7)
+  handles this correctly — spoken fallback, structured log, clean session end,
+  and no further work leaks through after the session ends (verified fix).
 
 ## Security
 

@@ -1,26 +1,54 @@
-const statusEl = document.getElementById("status") as HTMLElement;
-const micEl = document.getElementById("mic") as HTMLElement;
+// UI elements
+const connPill = document.getElementById("conn-pill") as HTMLElement;
+const connText = document.getElementById("conn-text") as HTMLElement;
+const micPill = document.getElementById("mic-pill") as HTMLElement;
+const micText = document.getElementById("mic-text") as HTMLElement;
+const orb = document.getElementById("orb") as HTMLElement;
+const stateLabel = document.getElementById("state-label") as HTMLElement;
 const startBtn = document.getElementById("start") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop") as HTMLButtonElement;
+const transcriptEl = document.getElementById("transcript") as HTMLElement;
+const statEot = document.getElementById("stat-eot") as HTMLElement;
+const statLlm = document.getElementById("stat-llm") as HTMLElement;
+const statHeadline = document.getElementById("stat-headline") as HTMLElement;
+const statBarge = document.getElementById("stat-barge") as HTMLElement;
 
-function setStatus(text: string, cls: string): void {
-  statusEl.textContent = text;
-  statusEl.className = cls;
+function setConn(text: string, status: "ok" | "err" | "warn"): void {
+  connText.textContent = text;
+  connPill.dataset.status = status;
+}
+function setMic(text: string, status: "ok" | "err" | "warn"): void {
+  micText.textContent = text;
+  micPill.dataset.status = status;
+}
+function setOrbState(state: "idle" | "listening" | "thinking" | "speaking" | "error", label: string): void {
+  orb.dataset.state = state;
+  stateLabel.textContent = label;
 }
 
-function setMic(text: string, cls: string): void {
-  micEl.textContent = text;
-  micEl.className = cls;
+/** Format a millisecond metric with a color class: good < goodMax, warn < warnMax, else bad. */
+function fmtMs(el: HTMLElement, ms: number | null, goodMax: number, warnMax: number): void {
+  el.classList.remove("stat-good", "stat-warn", "stat-bad");
+  if (ms === null) {
+    el.textContent = "—";
+    return;
+  }
+  el.textContent = `${ms} ms`;
+  el.classList.add(ms <= goodMax ? "stat-good" : ms <= warnMax ? "stat-warn" : "stat-bad");
 }
 
+function scrollTranscriptToBottom(): void {
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+// --- Session token (short-lived, single-use) then connect ---
 const proto = location.protocol === "https:" ? "wss" : "ws";
-// Session token first (short-lived, single-use), then connect.
 const sessionRes = await fetch("/session");
 const { token } = (await sessionRes.json()) as { token: string };
 const ws = new WebSocket(`${proto}://${location.host}/?token=${encodeURIComponent(token)}`);
 ws.binaryType = "arraybuffer";
 
-// --- Agent speech playback (Phase 4) ---
+// --- Agent speech playback ---
 // Raw 16 kHz PCM in, gapless Web Audio scheduling, instantly stoppable (barge-in).
 const PLAYBACK_RATE = 16000;
 let playCtx: AudioContext | null = null;
@@ -32,8 +60,8 @@ let awaitingFirstAudio = false;
 // playback. WS ordering guarantees the next reply's speech_end arrives after
 // every chunk of the old reply, so this can never eat new-reply audio.
 let acceptAudio = true;
-
 let vadActive = false; // user currently talking (from worklet VAD)
+let bargeCount = 0;
 
 function playPcm(buf: ArrayBuffer): void {
   // User is mid-speech as this reply's audio arrives (they started talking while
@@ -45,9 +73,10 @@ function playPcm(buf: ArrayBuffer): void {
       ws.send(JSON.stringify({ type: "barge_in" }));
       ws.send(JSON.stringify({ type: "client_metric", name: "barge_stop_ms", value: 0 }));
     }
-    latencyEl.textContent = `BARGE-IN #${bargeCount}: reply suppressed before playback (0 ms)`;
+    fmtMs(statBarge, 0, 150, 300);
     console.log(`BARGE-IN #${bargeCount}: user talking as reply arrived — suppressed, 0ms`);
     awaitingFirstAudio = false;
+    setOrbState("listening", "Listening");
     return;
   }
 
@@ -73,9 +102,10 @@ function playPcm(buf: ArrayBuffer): void {
     const startDelayMs = (nextPlayAt - now) * 1000;
     if (speechEndWallMs !== null) {
       const headline = Math.round(Date.now() + startDelayMs - speechEndWallMs);
-      latencyEl.textContent = `HEADLINE speech-end -> first audio: ${headline} ms`;
+      fmtMs(statHeadline, headline, 1500, 2500);
       console.log(`HEADLINE speech-end -> first-audio-played: ${headline}ms`);
     }
+    setOrbState("speaking", "Speaking");
   }
 
   src.start(nextPlayAt);
@@ -104,8 +134,6 @@ function agentAudioActive(): boolean {
   return liveSources.length > 0;
 }
 
-let bargeCount = 0;
-
 /** Client VAD says the user is talking. If the agent is audible: barge-in. */
 function onVoiceDetected(detectMs: number): void {
   if (!agentAudioActive()) return;
@@ -118,28 +146,52 @@ function onVoiceDetected(detectMs: number): void {
     ws.send(JSON.stringify({ type: "barge_in" }));
     ws.send(JSON.stringify({ type: "client_metric", name: "barge_stop_ms", value: stopMs }));
   }
-  latencyEl.textContent = `BARGE-IN #${bargeCount}: audio stopped in ${stopMs} ms`;
+  fmtMs(statBarge, stopMs, 150, 300);
   console.log(`BARGE-IN #${bargeCount}: voice-onset -> silence in ${stopMs}ms`);
+  setOrbState("listening", "Listening");
 }
 
-const transcriptEl = document.getElementById("transcript") as HTMLElement;
-const latencyEl = document.getElementById("latency") as HTMLElement;
-let interimLine: HTMLElement | null = null;
-let agentLine: HTMLElement | null = null;
+// --- Transcript rendering (chat bubbles) ---
+let interimBubble: HTMLElement | null = null;
+let agentBubble: HTMLElement | null = null;
 
 function renderStt(msg: { event: string; transcript: string; turnIndex: number }): void {
-  if (!interimLine) {
-    interimLine = document.createElement("div");
-    transcriptEl.appendChild(interimLine);
+  if (!msg.transcript.trim()) return;
+  if (!interimBubble) {
+    interimBubble = document.createElement("div");
+    interimBubble.className = "bubble bubble-user interim";
+    transcriptEl.appendChild(interimBubble);
   }
+  interimBubble.textContent = msg.transcript;
   if (msg.event === "EndOfTurn") {
-    interimLine.textContent = `you: ${msg.transcript}`;
-    interimLine.style.color = "";
-    interimLine = null; // next turn starts a fresh line
-  } else {
-    interimLine.textContent = `you: ${msg.transcript}`;
-    interimLine.style.color = "#888";
+    interimBubble.classList.remove("interim");
+    interimBubble = null; // next turn starts a fresh bubble
   }
+  scrollTranscriptToBottom();
+}
+
+function addToolRow(text: string): void {
+  const row = document.createElement("div");
+  row.className = "row-tool";
+  row.textContent = text;
+  transcriptEl.appendChild(row);
+  scrollTranscriptToBottom();
+}
+
+function addNoticeRow(text: string): void {
+  const row = document.createElement("div");
+  row.className = "row-notice";
+  row.textContent = text;
+  transcriptEl.appendChild(row);
+  scrollTranscriptToBottom();
+}
+
+function addFatalRow(text: string): void {
+  const row = document.createElement("div");
+  row.className = "row-fatal";
+  row.textContent = `⚠ ${text}`;
+  transcriptEl.appendChild(row);
+  scrollTranscriptToBottom();
 }
 
 ws.addEventListener("message", (e: MessageEvent) => {
@@ -153,34 +205,32 @@ ws.addEventListener("message", (e: MessageEvent) => {
   } catch {
     return;
   }
+
   if (msg.type === "stt") {
     renderStt(msg as unknown as { event: string; transcript: string; turnIndex: number });
   } else if (msg.type === "agent") {
-    if (!agentLine) {
-      agentLine = document.createElement("div");
-      agentLine.textContent = "agent: ";
-      agentLine.style.fontWeight = "bold";
-      transcriptEl.appendChild(agentLine);
+    if (!agentBubble) {
+      agentBubble = document.createElement("div");
+      agentBubble.className = "bubble bubble-agent";
+      transcriptEl.appendChild(agentBubble);
     }
-    agentLine.textContent += String(msg.delta);
+    agentBubble.textContent += String(msg.delta);
+    scrollTranscriptToBottom();
   } else if (msg.type === "agent_done") {
-    agentLine = null;
+    agentBubble = null;
   } else if (msg.type === "tool_call") {
-    const line = document.createElement("div");
-    line.style.color = "#888";
-    line.style.fontSize = "0.85em";
-    line.textContent = `⚙ ${msg.name}(${JSON.stringify(msg.args)})`;
-    transcriptEl.appendChild(line);
+    addToolRow(`⚙ ${msg.name}(${JSON.stringify(msg.args)})`);
   } else if (msg.type === "tool_result") {
-    const line = document.createElement("div");
-    line.style.color = "#888";
-    line.style.fontSize = "0.85em";
-    line.textContent = `⚙ → ${JSON.stringify(msg.result)}`;
-    transcriptEl.appendChild(line);
+    addToolRow(`⚙ → ${JSON.stringify(msg.result)}`);
   } else if (msg.type === "metric" && msg.name === "eot_gap_ms") {
-    latencyEl.textContent = `end-of-turn gap: ${msg.value} ms`;
+    fmtMs(statEot, msg.value as number | null, 700, 1200);
   } else if (msg.type === "metric" && msg.name === "llm_first_token_ms") {
-    console.log(`LLM first token: ${msg.value} ms`);
+    fmtMs(statLlm, msg.value as number, 700, 1500);
+  } else if (msg.type === "turn_state") {
+    const s = String(msg.state);
+    if (s === "LISTENING") setOrbState("listening", "Listening");
+    else if (s === "THINKING") setOrbState("thinking", "Thinking");
+    else if (s === "SPEAKING") setOrbState("speaking", "Speaking");
   } else if (msg.type === "speech_end") {
     speechEndWallMs = typeof msg.wallMs === "number" ? msg.wallMs : null;
     awaitingFirstAudio = true;
@@ -190,41 +240,39 @@ ws.addEventListener("message", (e: MessageEvent) => {
   } else if (msg.type === "stop_audio") {
     stopPlayback(); // server-side barge-in confirmation / STT fallback
     acceptAudio = false;
-  } else if (msg.type === "turn_state") {
-    console.log(`turn state: ${msg.state}`);
+  } else if (msg.type === "notice") {
+    // Soft, non-fatal session note (e.g. rate limit) — connection is fine.
+    addNoticeRow(String(msg.message ?? msg.code));
   } else if (msg.type === "fatal") {
     console.error("FATAL server error:", msg);
     acceptAudio = true; // let the fallback line play
     awaitingFirstAudio = false; // never suppress it
-    setStatus(`FAILED: ${msg.source}/${msg.code}`, "err");
-    const line = document.createElement("div");
-    line.style.color = "#c00";
-    line.textContent = `⚠ ${msg.source} failed (${msg.code}). ${msg.fallbackLine ?? "Session ending."}`;
-    transcriptEl.appendChild(line);
+    setConn(`Failed (${msg.source}/${msg.code})`, "err");
+    setOrbState("error", "Error");
+    addFatalRow(String(msg.fallbackLine ?? "Something went wrong. Session ending."));
   } else if (msg.type === "session_ended") {
-    console.log("session ended by server");
     stopCapture();
-    setStatus("session ended", "err");
+    setConn("Session ended", "warn");
+    setOrbState("idle", "Idle");
   } else if (msg.type === "error") {
     console.error("server error:", msg);
-    setStatus(`error: ${msg.code}`, "err");
+    addNoticeRow(String(msg.message ?? msg.code));
   }
 });
 
 ws.addEventListener("open", () => {
-  console.log("WS open");
-  setStatus("connected", "ok");
+  setConn("Connected", "ok");
+  startBtn.disabled = false;
 });
 ws.addEventListener("close", () => {
-  console.log("WS closed");
-  setStatus("disconnected", "err");
+  setConn("Disconnected", "err");
+  startBtn.disabled = true;
 });
 ws.addEventListener("error", () => {
-  console.error("WS error");
-  setStatus("error", "err");
+  setConn("Connection error", "err");
 });
 
-// --- Audio uplink (Phase 1) ---
+// --- Mic capture ---
 let audioCtx: AudioContext | null = null;
 let mediaStream: MediaStream | null = null;
 let framesSent = 0;
@@ -256,7 +304,6 @@ async function startCapture(): Promise<void> {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(e.data);
         framesSent++;
-        if (framesSent % 20 === 0) console.log(`sent ${framesSent} audio frames`);
       }
       return;
     }
@@ -272,7 +319,10 @@ async function startCapture(): Promise<void> {
   capture.connect(audioCtx.destination); // keeps the node processing; worklet outputs silence
 
   framesSent = 0;
-  setMic("live (16 kHz PCM streaming)", "ok");
+  setMic("Mic live", "ok");
+  setOrbState("listening", "Listening");
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
   console.log(`capture started, context rate ${audioCtx.sampleRate} Hz`);
 }
 
@@ -281,16 +331,26 @@ function stopCapture(): void {
   mediaStream = null;
   void audioCtx?.close();
   audioCtx = null;
-  setMic("off", "err");
+  stopPlayback();
+  setMic("Mic off", "err");
+  setOrbState("idle", "Idle");
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
   console.log(`capture stopped after ${framesSent} frames`);
 }
 
 startBtn.addEventListener("click", () => {
+  startBtn.disabled = true;
   startCapture().catch((err) => {
     console.error("mic start failed:", err);
-    setMic(`mic error: ${err.message ?? err}`, "err");
+    setMic(`Mic error: ${err.message ?? err}`, "err");
+    startBtn.disabled = false;
   });
 });
 stopBtn.addEventListener("click", stopCapture);
+
+// Buttons stay disabled until the WS is actually open.
+startBtn.disabled = ws.readyState !== WebSocket.OPEN;
+stopBtn.disabled = true;
 
 export {};

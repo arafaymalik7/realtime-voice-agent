@@ -146,8 +146,11 @@ export class TurnManager {
       return;
     }
     if (!this.deps.allowReply()) {
-      log("rate limit: LLM reply refused — session over per-minute cap");
-      sendJson({ type: "error", source: "session", code: "RATE_LIMITED", message: "Too many requests — please slow down." });
+      // Soft, non-fatal: the session and connection are fine, this one reply
+      // was skipped. Sent as "notice" (not "error") so the client doesn't
+      // mistake it for a connection/session failure.
+      log("rate limit: LLM reply skipped — session over per-minute cap");
+      sendJson({ type: "notice", code: "RATE_LIMITED", message: "One moment — catching up." });
       return;
     }
 

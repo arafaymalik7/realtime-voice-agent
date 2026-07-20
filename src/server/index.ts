@@ -26,7 +26,12 @@ const EAGER_EOT_THRESHOLD = 0.4;
 // --- Security / abuse limits (Phase 8) ---
 const SESSION_TOKEN_TTL_MS = 60_000; // token must be used within a minute
 const MAX_CONNS_PER_IP = 3;
-const LLM_CALLS_PER_MIN = 20; // caps cost abuse per session
+// Caps cost abuse per session. Set high relative to "conversational turns/min"
+// because the eager-overlap turn design (Phase 5) fires a fresh LLM call on
+// every incremental transcript update while the user is still talking — one
+// spoken utterance with a couple of pauses can cost 3-5 calls before the user
+// even finishes. A cap sized for "turns" (e.g. 20) throttles real conversation.
+const LLM_CALLS_PER_MIN = 60;
 const IDLE_TIMEOUT_MS = Number(process.env.IDLE_TIMEOUT_MS) || 5 * 60_000;
 // Transcripts are user speech (PII). Only log them when explicitly enabled.
 const DEBUG_TRANSCRIPTS = process.env.DEBUG_TRANSCRIPTS === "1";
@@ -177,10 +182,17 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
   }
 
   // --- Safe failure: speak the cached fallback line and end the session ---
+  // `sessionOver` is checked by the STT turn callback below: Deepgram can keep
+  // delivering a few buffered TurnInfo events after we call stt.close() (the
+  // WS close is async), and without this guard those late events would keep
+  // driving the turn state machine — starting new Gemini/ElevenLabs calls
+  // into a socket we've already ended the session on.
+  let sessionOver = false;
   let failed = false;
   function failSession(e: { source: string; code: string; message: string }): void {
     if (failed) return;
     failed = true;
+    sessionOver = true;
     log(`FATAL ${JSON.stringify(e)} — speaking fallback and ending session`);
 
     // Silence the pipeline first so nothing races the fallback audio.
@@ -242,6 +254,7 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
           log("stt: Deepgram Flux connected");
         },
         onTurn: (t: TurnEvent) => {
+          if (sessionOver) return; // late-arriving event after the session ended — ignore
           sendJson(ws, { type: "stt", event: t.event, transcript: t.transcript, turnIndex: t.turnIndex });
 
           const speechEndWallMs =
@@ -294,6 +307,7 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
   startStt();
 
   ws.on("message", (data, isBinary) => {
+    if (sessionOver) return; // draining while the close timer runs — ignore
     if (isBinary) {
       // Drop audio until Flux is open — keeps Deepgram's audio timeline aligned
       // with wall clock (first forwarded frame = timeline t=0).
@@ -331,6 +345,7 @@ wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
   });
 
   ws.on("close", () => {
+    sessionOver = true;
     clearInterval(idleTimer);
     const n = (connsPerIp.get(ip) ?? 1) - 1;
     if (n <= 0) connsPerIp.delete(ip);

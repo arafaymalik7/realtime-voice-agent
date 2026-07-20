@@ -10,7 +10,15 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "prepare": "husky || true"
+  },
+  "lint-staged": {
+    "*.{ts,js}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml,css,html}": "prettier --write"
   },
   "dependencies": {
     "@google/genai": "^2.11.0",
@@ -22,6 +30,8 @@
     "@types/node": "^22.10.0",
     "@types/ws": "^8.5.13",
     "eslint": "^10.7.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
     "prettier": "^3.9.5",
     "tsx": "^4.23.1",
     "typescript": "^5.7.0",

@@ -20,6 +20,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   low-latency alternative to Gemini.
 - Deployment: multi-stage `Dockerfile` (non-root, healthcheck), `.dockerignore`,
   `fly.toml`, and a CI job that builds the image.
+- Pre-commit hook (husky + lint-staged): auto-runs ESLint + Prettier on staged
+  files so formatting issues can't reach CI.
 
 ### Changed
 

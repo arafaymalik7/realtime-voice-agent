@@ -47,6 +47,10 @@ npm audit --audit-level=high
 
 `npm run format` auto-fixes formatting.
 
+A **pre-commit hook** (husky + lint-staged) runs ESLint `--fix` and Prettier on
+staged files automatically, so formatting issues can't reach CI. It's installed
+for you on `npm install`. To bypass it in an emergency: `git commit --no-verify`.
+
 ## Conventions
 
 - **TypeScript, strict mode.** No new `any` without a comment explaining why.

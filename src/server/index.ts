@@ -61,15 +61,27 @@ setInterval(() => {
 
 const connsPerIp = new Map<string, number>();
 
-// Origins allowed to open a WebSocket. Defaults to localhost for dev; in
-// production set ALLOWED_ORIGINS to your public origin(s), comma-separated
-// (e.g. "https://my-agent.fly.dev").
-const ALLOWED_ORIGINS = new Set(
-  (process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
-    : [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]
-  ).filter(Boolean)
-);
+// Origins allowed to open a WebSocket. Assembled from, in order:
+//  - ALLOWED_ORIGINS (comma-separated) if set — explicit control for any host
+//  - RENDER_EXTERNAL_URL — injected by Render, so a Render deploy self-configures
+//    its own public origin (no hardcoded URL to break when the app name changes)
+//  - localhost fallback for local dev when neither is set
+const ALLOWED_ORIGINS = (() => {
+  const origins = new Set<string>();
+  if (process.env.ALLOWED_ORIGINS) {
+    for (const o of process.env.ALLOWED_ORIGINS.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)) {
+      origins.add(o);
+    }
+  }
+  if (process.env.RENDER_EXTERNAL_URL) origins.add(process.env.RENDER_EXTERNAL_URL.trim());
+  if (origins.size === 0) {
+    origins.add(`http://localhost:${PORT}`);
+    origins.add(`http://127.0.0.1:${PORT}`);
+  }
+  return origins;
+})();
 
 // Behind a TLS-terminating proxy (Fly, most PaaS), the socket address is the
 // proxy's, not the client's — so the per-IP cap would treat all users as one.

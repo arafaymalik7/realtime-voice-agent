@@ -41,11 +41,11 @@ version-controlled, and every push to the default branch auto-deploys.
 
 ### After the first deploy
 
-- Your URL is `https://voxdesk.onrender.com` (or a suffixed variant if the name
-  collided). If it's suffixed, update the `ALLOWED_ORIGINS` env var in the Render
-  dashboard to the real URL and redeploy — the browser mic won't connect until
-  `ALLOWED_ORIGINS` matches the page's origin exactly.
-- Verify: `curl https://voxdesk.onrender.com/health` → `{"ok":true}`
+- Your URL is `https://voxdesk.onrender.com`, or a suffixed variant like
+  `https://voxdesk-41jd.onrender.com` if the name collided. Either way it just
+  works: the app reads Render's injected `RENDER_EXTERNAL_URL` and allowlists its
+  own origin automatically — no manual `ALLOWED_ORIGINS` step.
+- Verify: `curl https://<your-url>/health` → `{"ok":true}`
 - Open the page, allow the mic, and speak.
 
 `TRUST_PROXY=1` (set in `render.yaml`) makes the per-IP connection cap use the

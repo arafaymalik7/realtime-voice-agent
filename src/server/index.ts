@@ -61,8 +61,32 @@ setInterval(() => {
 
 const connsPerIp = new Map<string, number>();
 
-// Origins allowed to open a WebSocket. Localhost only for now; revisit in Phase 8.
-const ALLOWED_ORIGINS = new Set([`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]);
+// Origins allowed to open a WebSocket. Defaults to localhost for dev; in
+// production set ALLOWED_ORIGINS to your public origin(s), comma-separated
+// (e.g. "https://my-agent.fly.dev").
+const ALLOWED_ORIGINS = new Set(
+  (process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+    : [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`]
+  ).filter(Boolean)
+);
+
+// Behind a TLS-terminating proxy (Fly, most PaaS), the socket address is the
+// proxy's, not the client's — so the per-IP cap would treat all users as one.
+// When TRUST_PROXY=1, derive the client IP from the edge-set header instead.
+// Only enable this when actually behind a trusted proxy: the header is
+// client-spoofable otherwise.
+const TRUST_PROXY = process.env.TRUST_PROXY === "1";
+
+function clientIp(req: http.IncomingMessage): string {
+  if (TRUST_PROXY) {
+    const fly = req.headers["fly-client-ip"];
+    if (typeof fly === "string" && fly) return fly;
+    const xff = req.headers["x-forwarded-for"];
+    if (typeof xff === "string" && xff) return xff.split(",")[0].trim();
+  }
+  return req.socket.remoteAddress ?? "unknown";
+}
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -136,7 +160,7 @@ const wss = new WebSocketServer({
     }
     sessionTokens.delete(token); // single-use
     // 3. Concurrent connections per IP
-    const ip = req.socket.remoteAddress ?? "unknown";
+    const ip = clientIp(req);
     if ((connsPerIp.get(ip) ?? 0) >= MAX_CONNS_PER_IP) {
       log(`WS rejected: too many connections from ${ip}`);
       return false;
@@ -150,7 +174,7 @@ function sendJson(ws: WebSocket, obj: unknown): void {
 }
 
 wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
-  const ip = req.socket.remoteAddress ?? "unknown";
+  const ip = clientIp(req);
   connsPerIp.set(ip, (connsPerIp.get(ip) ?? 0) + 1);
   log("connected");
 

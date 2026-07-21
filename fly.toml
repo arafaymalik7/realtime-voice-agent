@@ -12,6 +12,13 @@ primary_region = "iad"
 [build]
   dockerfile = "Dockerfile"
 
+[env]
+  # Behind Fly's proxy: trust the edge-set client-IP header for the per-IP cap.
+  TRUST_PROXY = "1"
+  # Set this to your actual app URL after `fly launch` names the app, e.g.
+  # ALLOWED_ORIGINS = "https://realtime-voice-agent.fly.dev"
+  # (fly deploy picks it up from here, or set it via `fly secrets`/`fly config`).
+
 [http_service]
   internal_port = 3000
   force_https = true

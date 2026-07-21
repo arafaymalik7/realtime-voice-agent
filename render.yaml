@@ -1,0 +1,30 @@
+# Render Blueprint — deploys the voice agent as a Docker web service on the free
+# tier. In the Render dashboard: New → Blueprint → pick this repo. Render reads
+# this file, then prompts you to paste the three secret keys (sync: false).
+#
+# Free-tier note: the service sleeps after ~15 min idle and cold-starts (~30-60s)
+# on the next request. That wait lands on page load, not mid-call.
+services:
+  - type: web
+    name: voxdesk
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: virginia # US East — closest free region to the US-hosted providers
+    healthCheckPath: /health
+    autoDeployTrigger: commit # every push to the default branch redeploys
+    envVars:
+      # If Render assigns a suffixed hostname (name collision), update this to the
+      # real URL in the dashboard, or edit here and push.
+      - key: ALLOWED_ORIGINS
+        value: https://voxdesk.onrender.com
+      - key: TRUST_PROXY
+        value: "1"
+      # Secrets — entered in the dashboard on first deploy, never stored in git.
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      # Optional: set LLM_PROVIDER=groq + GROQ_API_KEY for lower latency.

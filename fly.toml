@@ -6,7 +6,7 @@
 # The Origin allowlist in src/server/index.ts must include your Fly hostname
 # (https://<app>.fly.dev) before the browser mic + WebSocket will work.
 
-app = "realtime-voice-agent"
+app = "voxdesk"
 primary_region = "iad"
 
 [build]
@@ -15,9 +15,8 @@ primary_region = "iad"
 [env]
   # Behind Fly's proxy: trust the edge-set client-IP header for the per-IP cap.
   TRUST_PROXY = "1"
-  # Set this to your actual app URL after `fly launch` names the app, e.g.
-  # ALLOWED_ORIGINS = "https://realtime-voice-agent.fly.dev"
-  # (fly deploy picks it up from here, or set it via `fly secrets`/`fly config`).
+  # Only this origin may open a WebSocket (browser mic needs HTTPS + a match).
+  ALLOWED_ORIGINS = "https://voxdesk.fly.dev"
 
 [http_service]
   internal_port = 3000
